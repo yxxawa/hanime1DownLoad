@@ -1,6 +1,6 @@
 # hanime1DownLoad
-可以搜索/下载hanime1的视频，内置了代理，开启后无需再挂梯子即可使用。
-支持多线程下载
+可以搜索/下载hanime1的视频，内置了代理。
 
-<img width="1204" height="1192" alt="2" src="https://github.com/user-attachments/assets/b12b5128-2ae8-459b-891c-c63de9e7ce1f" />
-<img width="1204" height="1192" alt="1" src="https://github.com/user-attachments/assets/1848dd4f-d68d-4060-a9ff-d24b759e0ce6" />
+
+<img width="1204" height="1192" alt="d6d161ad-8d09-47c3-9512-cd46f6b907ae" src="https://github.com/user-attachments/assets/cfe31a80-e099-4a1c-884b-8e2821251fcc" />
+<img width="1204" height="1192" alt="image" src="https://github.com/user-attachments/assets/ce617a5c-9a35-4591-9f27-360e29c442ea" />
