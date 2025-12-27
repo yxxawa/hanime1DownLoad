@@ -2,10 +2,12 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import json
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urljoin
 import time
 import os
 import glob
+import pickle
+
 
 def cleanup_old_html_files():
     search_files = glob.glob('search_response_*.html')
@@ -68,6 +70,82 @@ class Hanime1API:
         self.proxy_enabled = False
         self.session.proxies = {}
         self.session.cookies.set('cf_clearance', '')
+        
+        # 缓存相关属性
+        self.cache_dir = "cache"
+        self.search_cache_file = os.path.join(self.cache_dir, "search_cache.pkl")
+        self.video_cache_file = os.path.join(self.cache_dir, "video_cache.pkl")
+        self.cache_expiry = 48 * 60 * 60  # 缓存过期时间，48小时
+        
+        # 初始化缓存
+        self._init_cache()
+        
+    def _init_cache(self):
+        """
+        初始化缓存，确保缓存目录和文件存在
+        """
+        # 创建缓存目录
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+        
+        # 加载搜索缓存
+        try:
+            with open(self.search_cache_file, 'rb') as f:
+                self.search_cache = pickle.load(f)
+        except (FileNotFoundError, pickle.UnpicklingError, EOFError):
+            self.search_cache = {}
+        
+        # 加载视频缓存
+        try:
+            with open(self.video_cache_file, 'rb') as f:
+                self.video_cache = pickle.load(f)
+        except (FileNotFoundError, pickle.UnpicklingError, EOFError):
+            self.video_cache = {}
+    
+    def _save_cache(self):
+        """
+        保存缓存到文件
+        """
+        try:
+            with open(self.search_cache_file, 'wb') as f:
+                pickle.dump(self.search_cache, f)
+        except Exception:
+            pass
+        
+        try:
+            with open(self.video_cache_file, 'wb') as f:
+                pickle.dump(self.video_cache, f)
+        except Exception:
+            pass
+    
+    def clear_cache(self):
+        """
+        清除所有缓存
+        """
+        self.search_cache.clear()
+        self.video_cache.clear()
+        
+        # 删除缓存文件
+        try:
+            if os.path.exists(self.search_cache_file):
+                os.remove(self.search_cache_file)
+            if os.path.exists(self.video_cache_file):
+                os.remove(self.video_cache_file)
+        except Exception:
+            pass
+    
+    def _is_cache_valid(self, cache_entry):
+        """
+        检查缓存是否有效
+        :param cache_entry: 缓存条目，包含timestamp和data字段
+        :return: 缓存是否有效
+        """
+        if not cache_entry or 'timestamp' not in cache_entry or 'data' not in cache_entry:
+            return False
+        
+        # 检查缓存是否过期
+        current_time = time.time()
+        return (current_time - cache_entry['timestamp']) < self.cache_expiry
     
     def enable_proxy(self):
         try:
@@ -158,132 +236,226 @@ class Hanime1API:
     def is_proxy_enabled(self):
         return self.proxy_enabled
     
-    def search_videos(self, query, genre="", sort="", date="", duration="", page=1):
-        params = {
-            'query': query,
-            'type': '',
-            'genre': genre,
-            'sort': sort,
-            'date': date,
-            'duration': duration,
-            'page': page if page > 1 else None
-        }
-        params = {k: v for k, v in params.items() if v}
-        
+    def get_remote_announcement(self):
+        """
+        获取远程公告
+        :return: 公告字典或None
+        """
         try:
-            url = f"{self.base_url}/search"
-            response = self.session.get(url, params=params, timeout=10)
-            if response.status_code != 200:
-                return None
+            # 这里可以替换为实际的远程公告API地址
+            # 目前使用本地模拟数据
+            return {
+                'title': '欢迎使用Hanime1视频工具',
+                'content': '这是一个用于搜索和下载Hanime1视频的工具。\n\n使用说明：\n1. 在搜索框中输入关键词或视频ID进行搜索\n2. 选择视频查看详情\n3. 点击下载按钮下载视频\n\n请注意遵守相关法律法规，合理使用本工具。\n\n仅用于学习，请在24小时内删除。'
+            }
+        except Exception:
+            # 如果获取远程公告失败，返回默认公告
+            return {
+                'title': '欢迎使用Hanime1视频工具',
+                'content': '这是一个用于搜索和下载Hanime1视频的工具。\n\n使用说明：\n1. 在搜索框中输入关键词或视频ID进行搜索\n2. 选择视频查看详情\n3. 点击下载按钮下载视频\n\n请注意遵守相关法律法规，合理使用本工具。\n\n仅用于学习，请在24小时内删除。'
+            }
+    
+    def search_videos(self, query, genre="", sort="", date="", duration="", page=1):
+        # 生成缓存键
+        cache_key = f"search:{query}:{genre}:{sort}:{date}:{duration}:{page}"
+        
+        # 检查缓存是否有效
+        if cache_key in self.search_cache:
+            cache_entry = self.search_cache[cache_key]
+            if self._is_cache_valid(cache_entry):
+                return cache_entry['data']
+        
+        # 检查是否是ID搜索（纯数字）
+        if query.isdigit():
+            # 直接通过ID获取视频信息
+            video_info = self.get_video_info(query)
+            if video_info:
+                # 包装成与搜索结果相同的格式
+                result = {
+                    'query': query,
+                    'params': {'query': query},
+                    'total_results': 1,
+                    'current_page': 1,
+                    'total_pages': 1,
+                    'videos': [{
+                        'video_id': video_info['video_id'],
+                        'title': video_info['title'],
+                        'url': video_info['url'],
+                        'thumbnail': video_info['thumbnail']
+                    }],
+                    'has_results': True
+                }
+            else:
+                result = {
+                    'query': query,
+                    'params': {'query': query},
+                    'total_results': 0,
+                    'current_page': 1,
+                    'total_pages': 1,
+                    'videos': [],
+                    'has_results': False
+                }
             
-            html_content = None
-            content_encoding = response.headers.get('Content-Encoding', '').lower()
+            # 只有搜索成功的结果才保存到缓存中
+            if result and result['has_results']:
+                cache_key = f"search:{query}:{genre}:{sort}:{date}:{duration}:{page}"
+                self.search_cache[cache_key] = {
+                    'timestamp': time.time(),
+                    'data': result
+                }
+                # 异步保存缓存，避免阻塞
+                import threading
+                threading.Thread(target=self._save_cache).start()
+            
+            return result
+        else:
+            # 常规搜索逻辑
+            params = {
+                'query': query,
+                'type': '',
+                'genre': genre,
+                'sort': sort,
+                'date': date,
+                'duration': duration,
+                'page': page if page > 1 else None
+            }
+            params = {k: v for k, v in params.items() if v}
+            
             try:
-                if 'br' in content_encoding:
-                    import brotli
-                    html_content = brotli.decompress(response.content).decode('utf-8')
-                else:
-                    response.encoding = 'utf-8'
-                    html_content = response.text
-            except Exception:
-                try:
-                    html_content = response.text
-                except:
+                url = f"{self.base_url}/search"
+                response = self.session.get(url, params=params, timeout=10)
+                if response.status_code != 200:
                     return None
             
-            if not html_content or '<html' not in html_content.lower() and '<!doctype' not in html_content.lower():
-                return None
-            
-            soup = BeautifulSoup(html_content, 'html.parser')
-            search_info = {
-                'query': query,
-                'params': params,
-                'total_results': 0,
-                'current_page': page,
-                'total_pages': 1,
-                'videos': [],
-                'has_results': False
-            }
-            
-            video_items = soup.find_all('div', class_='search-doujin-videos')
-            for index, item in enumerate(video_items):
-                video_link = item.find('a', class_='overlay')
-                if video_link and hasattr(video_link, 'attrs') and 'href' in video_link.attrs:
-                    match = re.search(r'v=(\d+)', video_link['href'])
-                    if match:
-                        video_id = match.group(1)
-                        if any(v['video_id'] == video_id for v in search_info['videos']):
-                            continue
-                        title = item.get('title', f"视频 {video_id}")
-                        img_tags = item.find_all('img')
-                        thumbnail = ""
-                        for img in img_tags:
-                            if img.get('src'):
-                                if 'thumbnail' in img.get('src'):
-                                    thumbnail = img.get('src')
-                                    break
-                        if not thumbnail and img_tags:
+                html_content = None
+                content_encoding = response.headers.get('Content-Encoding', '').lower()
+                try:
+                    if 'br' in content_encoding:
+                        import brotli
+                        html_content = brotli.decompress(response.content).decode('utf-8')
+                    else:
+                        response.encoding = 'utf-8'
+                        html_content = response.text
+                except Exception:
+                    try:
+                        html_content = response.text
+                    except:
+                        return None
+                
+                if not html_content or '<html' not in html_content.lower() and '<!doctype' not in html_content.lower():
+                    return None
+                
+                soup = BeautifulSoup(html_content, 'html.parser')
+                search_info = {
+                    'query': query,
+                    'params': params,
+                    'total_results': 0,
+                    'current_page': page,
+                    'total_pages': 1,
+                    'videos': [],
+                    'has_results': False
+                }
+                
+                video_items = soup.find_all('div', class_='search-doujin-videos')
+                for index, item in enumerate(video_items):
+                    video_link = item.find('a', class_='overlay')
+                    if video_link and hasattr(video_link, 'attrs') and 'href' in video_link.attrs:
+                        match = re.search(r'v=(\d+)', video_link['href'])
+                        if match:
+                            video_id = match.group(1)
+                            if any(v['video_id'] == video_id for v in search_info['videos']):
+                                continue
+                            title = item.get('title', f"视频 {video_id}")
+                            img_tags = item.find_all('img')
+                            thumbnail = ""
                             for img in img_tags:
                                 if img.get('src'):
-                                    thumbnail = img.get('src')
-                                    break
-                        search_info['videos'].append({
-                            'video_id': video_id,
-                            'title': title,
-                            'url': f"{self.base_url}/watch?v={video_id}",
-                            'thumbnail': thumbnail
-                        })
-            
-            if not search_info['videos']:
-                all_links = soup.find_all('a', href=re.compile(r'/watch\?v=\d+'))
-                for link in all_links:
-                    match = re.search(r'v=(\d+)', link['href'])
-                    if match:
-                        video_id = match.group(1)
-                        if not any(v['video_id'] == video_id for v in search_info['videos']):
-                            title_elem = link.find(class_=re.compile(r'.*title.*|.*name.*'))
-                            title = title_elem.get_text(strip=True) if title_elem else f"视频 {video_id}"
-                            img = link.find('img')
-                            thumbnail = img.get('src') if img else ''
+                                    if 'thumbnail' in img.get('src'):
+                                        thumbnail = img.get('src')
+                                        break
+                            if not thumbnail and img_tags:
+                                for img in img_tags:
+                                    if img.get('src'):
+                                        thumbnail = img.get('src')
+                                        break
                             search_info['videos'].append({
                                 'video_id': video_id,
                                 'title': title,
                                 'url': f"{self.base_url}/watch?v={video_id}",
                                 'thumbnail': thumbnail
                             })
+                
+                if not search_info['videos']:
+                    all_links = soup.find_all('a', href=re.compile(r'/watch\?v=\d+'))
+                    for link in all_links:
+                        match = re.search(r'v=(\d+)', link['href'])
+                        if match:
+                            video_id = match.group(1)
+                            if not any(v['video_id'] == video_id for v in search_info['videos']):
+                                title_elem = link.find(class_=re.compile(r'.*title.*|.*name.*'))
+                                title = title_elem.get_text(strip=True) if title_elem else f"视频 {video_id}"
+                                img = link.find('img')
+                                thumbnail = img.get('src') if img else ''
+                                search_info['videos'].append({
+                                    'video_id': video_id,
+                                    'title': title,
+                                    'url': f"{self.base_url}/watch?v={video_id}",
+                                    'thumbnail': thumbnail
+                                })
+                
+                pagination = soup.find('div', class_='search-pagination')
+                if pagination:
+                    page_links = pagination.find_all('a', href=re.compile(r'.*page=\d+.*'))
+                    if page_links:
+                        page_numbers = []
+                        for link in page_links:
+                            text = link.get_text(strip=True)
+                            if text.isdigit():
+                                page_numbers.append(int(text))
+                        if page_numbers:
+                            search_info['total_pages'] = max(page_numbers)
+                
+                skip_form = soup.find('form', {'id': 'skip-page-form'})
+                if skip_form:
+                    total_div = skip_form.find('div', string=re.compile(r'/\s*\d+'))
+                    if total_div:
+                        match = re.search(r'/(d+)', total_div.get_text())
+                        if match:
+                            search_info['total_pages'] = int(match.group(1))
+                
+                search_info['total_results'] = len(search_info['videos'])
+                search_info['has_results'] = len(search_info['videos']) > 0
+                result = search_info
+            except requests.RequestException:
+                return None
+            except Exception:
+                return None
             
-            pagination = soup.find('div', class_='search-pagination')
-            if pagination:
-                page_links = pagination.find_all('a', href=re.compile(r'.*page=\d+.*'))
-                if page_links:
-                    page_numbers = []
-                    for link in page_links:
-                        text = link.get_text(strip=True)
-                        if text.isdigit():
-                            page_numbers.append(int(text))
-                    if page_numbers:
-                        search_info['total_pages'] = max(page_numbers)
+            # 只有搜索成功的结果才保存到缓存中
+            if result and result['has_results']:
+                cache_key = f"search:{query}:{genre}:{sort}:{date}:{duration}:{page}"
+                self.search_cache[cache_key] = {
+                    'timestamp': time.time(),
+                    'data': result
+                }
+                # 异步保存缓存，避免阻塞
+                import threading
+                threading.Thread(target=self._save_cache).start()
             
-            skip_form = soup.find('form', {'id': 'skip-page-form'})
-            if skip_form:
-                total_div = skip_form.find('div', string=re.compile(r'/\s*\d+'))
-                if total_div:
-                    match = re.search(r'/(d+)', total_div.get_text())
-                    if match:
-                        search_info['total_pages'] = int(match.group(1))
-            
-            search_info['total_results'] = len(search_info['videos'])
-            search_info['has_results'] = len(search_info['videos']) > 0
-            return search_info
-            
-        except requests.RequestException:
-            return None
-        except Exception:
-            return None
+            return result
     
     def get_video_info(self, video_id):
+        # 生成缓存键
+        cache_key = f"video:{video_id}"
+        
+        # 检查缓存是否有效
+        if cache_key in self.video_cache:
+            cache_entry = self.video_cache[cache_key]
+            if self._is_cache_valid(cache_entry):
+                return cache_entry['data']
+        
         url = f"{self.base_url}/watch?v={video_id}"
-        max_retries = 3
+        max_retries = 2  # 减少重试次数
         for retry in range(max_retries):
             try:
                 video_headers = self.headers.copy()
@@ -312,10 +484,12 @@ class Hanime1API:
                     'sec-ch-ua-full-version-list': f'"Google Chrome";v="{chrome_version}", "Chromium";v="{chrome_version}", "Not_A Brand";v="24.0.0.0"',
                     'sec-ch-ua-wow64': '?0',
                 })
-                home_response = self.session.get(self.base_url, headers=video_headers, timeout=10)
-                delay = random.uniform(0.5, 1.5)
-                time.sleep(delay)
-                response = self.session.get(url, headers=video_headers, timeout=15)
+                # 移除不必要的首页访问和延迟，直接请求视频页面
+                # 减少延迟时间，只在重试时使用
+                if retry > 0:
+                    delay = random.uniform(0.2, 0.5)
+                    time.sleep(delay)
+                response = self.session.get(url, headers=video_headers, timeout=12)  # 减少超时时间
                 if response.status_code != 200:
                     if response.status_code == 403:
                         self.session.cookies.clear()
@@ -356,10 +530,9 @@ class Hanime1API:
                 if not html_content or '<html' not in html_content.lower():
                     continue
                 
-                try:
-                    soup = BeautifulSoup(html_content, 'lxml')
-                except:
-                    soup = BeautifulSoup(html_content, 'html.parser')
+                # 优化：直接使用html.parser，避免lxml可能的导入问题和性能开销
+                # html.parser是Python标准库，性能足够且稳定
+                soup = BeautifulSoup(html_content, 'html.parser')
                 
                 video_info = {
                     'video_id': video_id,
@@ -418,7 +591,6 @@ class Hanime1API:
                         src = source.get('src')
                         if src:
                             if not src.startswith('http'):
-                                from urllib.parse import urljoin
                                 src = urljoin(self.base_url, src)
                             video_info['video_sources'].append({
                                 'url': src,
@@ -426,47 +598,51 @@ class Hanime1API:
                                 'type': source.get('type', 'video/mp4')
                             })
                 
+                # 优化：使用更高效的方式查找视频源
                 if not video_info['video_sources']:
-                    script_tags = soup.find_all('script')
-                    for script in script_tags:
-                        script_content = script.string or ''
-                        if script_content:
-                            if any(keyword in script_content for keyword in ['videoUrl', 'videoSrc', 'sourceUrl', 'mp4', 'playerConfig', 'videoConfig']):
-                                video_url_patterns = [
-                                    r'https?://[^"\'\s<>]+\.(?:mp4|m3u8|webm|flv)',
-                                    r'(?:videoUrl|videoSrc|sourceUrl|file)\s*[:=]\s*["\']([^"\']+)["\']',
-                                    r'["\'](https?://[^"\']+\.(?:mp4|m3u8|webm))["\']',
-                                    r'<source[^>]+src=["\']([^"\']+)["\']'
-                                ]
-                                for pattern in video_url_patterns:
-                                    matches = re.findall(pattern, script_content, re.IGNORECASE)
-                                    if matches:
-                                        for match in matches:
-                                            video_url = match[0] if isinstance(match, tuple) else match
-                                            if not video_url.startswith('http'):
-                                                continue
-                                            if not any(ext in video_url.lower() for ext in ['.mp4', '.m3u8', '.webm', '.flv']):
-                                                continue
-                                            if not any(source['url'] == video_url for source in video_info['video_sources']):
-                                                video_info['video_sources'].append({
-                                                    'url': video_url,
-                                                    'quality': 'unknown',
-                                                    'type': 'video/mp4'
-                                                })
+                    # 1. 先在HTML中直接查找视频URL，这是最快捷的方式
+                    video_url_pattern = r'https?://[^"\'\s<>]+\.(?:mp4|m3u8|webm|flv)'
+                    matches = re.findall(video_url_pattern, html_content)
+                    
+                    seen_urls = set()
+                    for video_url in matches:
+                        if video_url not in seen_urls:
+                            seen_urls.add(video_url)
+                            video_info['video_sources'].append({
+                                'url': video_url,
+                                'quality': 'unknown',
+                                'type': 'video/mp4'
+                            })
+                    
+                    # 2. 如果直接查找没有结果，再检查script标签
+                    if not video_info['video_sources']:
+                        script_tags = soup.find_all('script')
+                        video_keywords = {'videoUrl', 'videoSrc', 'sourceUrl', 'mp4', 'playerConfig', 'videoConfig'}
+                        
+                        for script in script_tags:
+                            script_content = script.string or ''
+                            if script_content and any(keyword in script_content for keyword in video_keywords):
+                                # 使用更高效的正则表达式组合
+                                combined_pattern = r'(https?://[^"\'\s<>]+\.(?:mp4|m3u8|webm|flv))|(?:videoUrl|videoSrc|sourceUrl|file)\s*[:=]\s*["\']([^"\']+)["\']'
+                                matches = re.findall(combined_pattern, script_content, re.IGNORECASE)
+                                
+                                for match in matches:
+                                    video_url = match[0] if match[0] else match[1]
+                                    if video_url and video_url not in seen_urls:
+                                        if not video_url.startswith('http'):
+                                            continue
+                                        if any(ext in video_url.lower() for ext in ['.mp4', '.m3u8', '.webm', '.flv']):
+                                            seen_urls.add(video_url)
+                                            video_info['video_sources'].append({
+                                                'url': video_url,
+                                                'quality': 'unknown',
+                                                'type': 'video/mp4'
+                                            })
+                                            if len(video_info['video_sources']) >= 3:  # 限制最多查找3个视频源
+                                                break
+                                
                                 if video_info['video_sources']:
                                     break
-                
-                if not video_info['video_sources']:
-                    video_url_pattern = r'(https?://[^"\'\s<>]+\.(?:mp4|m3u8|webm|flv))'
-                    matches = re.findall(video_url_pattern, html_content)
-                    if matches:
-                        for video_url in matches:
-                            if not any(source['url'] == video_url for source in video_info['video_sources']):
-                                video_info['video_sources'].append({
-                                    'url': video_url,
-                                    'quality': 'unknown',
-                                    'type': 'video/mp4'
-                                })
                 
                 tags_div = soup.find('div', class_='video-tags-wrapper')
                 if tags_div:
@@ -516,7 +692,7 @@ class Hanime1API:
                         seen.add(item['video_id'])
                         unique_series.append(item)
                 video_info['series'] = unique_series
-                return video_info
+                result = video_info
                 
             except requests.RequestException:
                 if retry < max_retries - 1:
@@ -528,6 +704,19 @@ class Hanime1API:
                     time.sleep(random.uniform(1, 2))
                     continue
                 return None
+        
+        # 只有成功获取到的视频信息才保存到缓存中
+        if result and result.get('video_id') == video_id:
+            cache_key = f"video:{video_id}"
+            self.video_cache[cache_key] = {
+                'timestamp': time.time(),
+                'data': result
+            }
+            # 异步保存缓存，避免阻塞
+            import threading
+            threading.Thread(target=self._save_cache).start()
+        
+        return result
 
 def print_search_results(search_info):
     if not search_info:
