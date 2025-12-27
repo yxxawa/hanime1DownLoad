@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, 
     QPushButton, QLineEdit, QListWidget, QLabel, QSplitter, 
     QGroupBox, QFormLayout, QTextEdit, QComboBox, QSpinBox, QRadioButton,
-    QProgressBar, QMenu, QAction, QScrollArea, QCheckBox
+    QProgressBar, QMenu, QAction, QScrollArea, QCheckBox, QFrame, QMessageBox
 )
 from PyQt5.QtCore import Qt, QThread, QRunnable, QThreadPool, pyqtSignal, pyqtSlot, QObject
 from PyQt5.QtGui import QPixmap, QImage
@@ -269,301 +269,7 @@ class DownloadWorker(QRunnable):
     def cancel(self):
         self.is_cancelled = True
 
-class FilterDialog(QDialog):
-    def __init__(self, parent=None, filters=None):
-        super().__init__(parent)
-        self.setWindowTitle("搜索筛选")
-        self.setGeometry(100, 100, 500, 600)
-        
-        self.filters = filters or {
-            'keyword': '',
-            'genre': '全部',
-            'sort': '最新上市',
-            'date': '全部',
-            'duration': '全部',
-            'properties': [],
-            'relationship': [],
-            'character_setting': [],
-            'appearance_body': [],
-            'scene_location': [],
-            'story_plot': [],
-            'sexual_position': []
-        }
-        
-        self.init_ui()
-    
-    def init_ui(self):
-        layout = QVBoxLayout()
-        
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(15)
-        
-        keyword_layout = QHBoxLayout()
-        keyword_layout.addWidget(QLabel("关键词:"))
-        self.keyword_input = QLineEdit(self.filters.get('keyword', ''))
-        self.keyword_input.setPlaceholderText("请输入搜索关键词...")
-        keyword_layout.addWidget(self.keyword_input)
-        scroll_layout.addLayout(keyword_layout)
-        
-        genre_group = QGroupBox("影片类型")
-        genre_layout = QGridLayout(genre_group)
-        
-        genre_options = ["全部", "里番", "泡面番", "Motion Anime", "3DCG", "2.5D", "2D动画", "AI生成", "MMD", "Cosplay"]
-        self.genre_buttons = []
-        for i, genre in enumerate(genre_options):
-            radio_button = QRadioButton(genre)
-            if genre == self.filters.get('genre', '全部'):
-                radio_button.setChecked(True)
-            self.genre_buttons.append((genre, radio_button))
-            genre_layout.addWidget(radio_button, i // 2, i % 2)
-        
-        scroll_layout.addWidget(genre_group)
-        
-        properties_group = QGroupBox("影片属性")
-        properties_layout = QGridLayout(properties_group)
-        
-        properties_options = ["无码", "AI解码", "中文字幕", "中文配音", "同人作品", "断面图", "ASMR", "1080p", "60FPS"]
-        self.properties_checkboxes = {}
-        for i, prop in enumerate(properties_options):
-            checkbox = QCheckBox(prop)
-            if prop in self.filters.get('properties', []):
-                checkbox.setChecked(True)
-            self.properties_checkboxes[prop] = checkbox
-            properties_layout.addWidget(checkbox, i // 3, i % 3)
-        
-        scroll_layout.addWidget(properties_group)
-        
-        relationship_group = QGroupBox("人物关系")
-        relationship_layout = QGridLayout(relationship_group)
-        
-        relationship_options = ["近亲", "姐", "妹", "母", "女儿", "师生", "情侣", "青梅竹马", "同事"]
-        self.relationship_checkboxes = {}
-        for i, rel in enumerate(relationship_options):
-            checkbox = QCheckBox(rel)
-            if rel in self.filters.get('relationship', []):
-                checkbox.setChecked(True)
-            self.relationship_checkboxes[rel] = checkbox
-            relationship_layout.addWidget(checkbox, i // 3, i % 3)
-        
-        scroll_layout.addWidget(relationship_group)
-        
-        character_group = QGroupBox("角色设定")
-        character_layout = QGridLayout(character_group)
-        
-        character_options = ["JK", "处女", "御姐", "熟女", "人妻", "女教师", "男教师", "女医生", "女病人", "护士",
-                           "OL", "女警", "大小姐", "偶像", "女仆", "巫女", "魔女", "修女", "风俗娘", "公主",
-                           "女忍者", "女战士", "女骑士", "魔法少女", "异种族", "天使", "妖精", "魔物娘", "魅魔", "吸血鬼",
-                           "女鬼", "兽娘", "乳牛", "机械娘", "碧池", "痴女", "雌小鬼", "不良少女", "傲娇", "病娇",
-                           "无口", "无表情", "眼神死", "正太", "伪娘", "扶他"]
-        self.character_checkboxes = {}
-        for i, char in enumerate(character_options):
-            checkbox = QCheckBox(char)
-            if char in self.filters.get('character_setting', []):
-                checkbox.setChecked(True)
-            self.character_checkboxes[char] = checkbox
-            character_layout.addWidget(checkbox, i // 3, i % 3)
-        
-        scroll_layout.addWidget(character_group)
-        
-        appearance_group = QGroupBox("外貌身材")
-        appearance_layout = QGridLayout(appearance_group)
-        
-        appearance_options = ["短发", "马尾", "双马尾", "丸子头", "巨乳", "乳环", "舌环", "贫乳", "黑皮肤", "晒痕",
-                           "眼镜娘", "兽耳", "尖耳朵", "异色瞳", "美人痣", "肌肉女", "白虎", "阴毛", "腋毛", "大屌",
-                           "着衣", "水手服", "体操服", "泳装", "比基尼", "死库水", "和服", "兔女郎", "围裙", "啦啦队",
-                           "丝袜", "吊袜带", "热裤", "迷你裙", "性感内衣", "紧身衣", "丁字裤", "高跟鞋", "睡衣", "婚纱",
-                           "旗袍", "古装", "哥德", "口罩", "刺青", "淫纹", "身体写字"]
-        self.appearance_checkboxes = {}
-        for i, app in enumerate(appearance_options):
-            checkbox = QCheckBox(app)
-            if app in self.filters.get('appearance_body', []):
-                checkbox.setChecked(True)
-            self.appearance_checkboxes[app] = checkbox
-            appearance_layout.addWidget(checkbox, i // 3, i % 3)
-        
-        scroll_layout.addWidget(appearance_group)
-        
-        scene_group = QGroupBox("情境场所")
-        scene_layout = QGridLayout(scene_group)
-        
-        scene_options = ["校园", "教室", "图书馆", "保健室", "游泳池", "爱情宾馆", "医院", "办公室", "浴室", "窗边",
-                       "公共厕所", "公众场合", "户外野战", "电车", "车震", "游艇", "露营帐篷", "电影院", "健身房", "沙滩",
-                       "温泉", "夜店", "监狱", "教堂"]
-        self.scene_checkboxes = {}
-        for i, scene in enumerate(scene_options):
-            checkbox = QCheckBox(scene)
-            if scene in self.filters.get('scene_location', []):
-                checkbox.setChecked(True)
-            self.scene_checkboxes[scene] = checkbox
-            scene_layout.addWidget(checkbox, i // 3, i % 3)
-        
-        scroll_layout.addWidget(scene_group)
-        
-        story_group = QGroupBox("故事剧情")
-        story_layout = QGridLayout(story_group)
-        
-        story_options = ["纯爱", "恋爱喜剧", "后宫", "十指紧扣", "开大车", "NTR", "精神控制", "药物", "痴汉", "阿嘿颜",
-                       "精神崩溃", "猎奇", "BDSM", "捆绑", "眼罩", "项圈", "调教", "异物插入", "寻欢洞", "肉便器",
-                       "性奴隶", "胃凸", "强制", "轮奸", "凌辱", "性暴力", "逆强制", "女王样", "榨精", "母女丼",
-                       "姐妹丼", "出轨", "醉酒", "摄影", "睡眠奸", "机械奸", "虫奸", "性转换", "百合", "耽美",
-                       "时间停止", "异世界", "怪兽", "哥布林", "世界末日"]
-        self.story_checkboxes = {}
-        for i, story in enumerate(story_options):
-            checkbox = QCheckBox(story)
-            if story in self.filters.get('story_plot', []):
-                checkbox.setChecked(True)
-            self.story_checkboxes[story] = checkbox
-            story_layout.addWidget(checkbox, i // 3, i % 3)
-        
-        scroll_layout.addWidget(story_group)
-        
-        position_group = QGroupBox("性交体位")
-        position_layout = QGridLayout(position_group)
-        
-        position_options = ["手交", "指交", "乳交", "乳头交", "肛交", "双洞齐下", "脚交", "素股", "拳交", "3P",
-                           "群交", "口交", "深喉咙", "口爆", "吞精", "舔蛋蛋", "舔穴", "69", "自慰", "腋交",
-                           "舔腋下", "发交", "舔耳朵", "舔脚", "内射", "外射", "颜射", "潮吹", "怀孕", "喷奶",
-                           "放尿", "排便", "骑乘位", "背后位", "颜面骑乘", "火车便当", "一字马", "性玩具", "飞机杯", "跳蛋",
-                           "毒龙钻", "触手", "兽交", "颈手枷", "扯头发", "掐脖子", "打屁股", "肉棒打脸", "阴道外翻", "男乳首责",
-                           "接吻", "舌吻", "POV"]
-        self.position_checkboxes = {}
-        for i, pos in enumerate(position_options):
-            checkbox = QCheckBox(pos)
-            if pos in self.filters.get('sexual_position', []):
-                checkbox.setChecked(True)
-            self.position_checkboxes[pos] = checkbox
-            position_layout.addWidget(checkbox, i // 3, i % 3)
-        
-        scroll_layout.addWidget(position_group)
-        
-        sort_group = QGroupBox("排序方式")
-        sort_layout = QGridLayout(sort_group)
-        
-        sort_options = ["最新上市", "最新上传", "本日排行", "本周排行", "本月排行", "观看次数", "点赞比例", "时长最长", "他们在看"]
-        self.sort_buttons = []
-        for i, sort in enumerate(sort_options):
-            radio_button = QRadioButton(sort)
-            if sort == self.filters.get('sort', '最新上市'):
-                radio_button.setChecked(True)
-            self.sort_buttons.append((sort, radio_button))
-            sort_layout.addWidget(radio_button, i // 2, i % 2)
-        
-        scroll_layout.addWidget(sort_group)
-        
-        date_group = QGroupBox("发布日期")
-        date_layout = QGridLayout(date_group)
-        
-        date_options = ["全部", "过去 24 小时", "过去 2 天", "过去 1 周", "过去 1 个月", "过去 3 个月", "过去 1 年"]
-        self.date_buttons = []
-        for i, date in enumerate(date_options):
-            radio_button = QRadioButton(date)
-            if date == self.filters.get('date', '全部'):
-                radio_button.setChecked(True)
-            self.date_buttons.append((date, radio_button))
-            date_layout.addWidget(radio_button, i // 2, i % 2)
-        
-        scroll_layout.addWidget(date_group)
-        
-        duration_group = QGroupBox("时长")
-        duration_layout = QGridLayout(duration_group)
-        
-        duration_options = ["全部", "1 分钟 +", "5 分钟 +", "10 分钟 +", "20 分钟 +", "30 分钟 +", "60 分钟 +", "0 - 10 分钟", "0 - 20 分钟"]
-        self.duration_buttons = []
-        for i, duration in enumerate(duration_options):
-            radio_button = QRadioButton(duration)
-            if duration == self.filters.get('duration', '全部'):
-                radio_button.setChecked(True)
-            self.duration_buttons.append((duration, radio_button))
-            duration_layout.addWidget(radio_button, i // 3, i % 3)
-        
-        scroll_layout.addWidget(duration_group)
-        
-        scroll_area.setWidget(scroll_content)
-        layout.addWidget(scroll_area)
-        
-        button_layout = QHBoxLayout()
-        self.save_button = QPushButton("应用筛选")
-        self.save_button.clicked.connect(self.save_filters)
-        self.cancel_button = QPushButton("取消")
-        self.cancel_button.clicked.connect(self.reject)
-        
-        button_layout.addStretch()
-        button_layout.addWidget(self.save_button)
-        button_layout.addWidget(self.cancel_button)
-        layout.addLayout(button_layout)
-        
-        self.setLayout(layout)
-    
-    def save_filters(self):
-        try:
-            self.filters['keyword'] = self.keyword_input.text().strip()
-            
-            for genre, button in self.genre_buttons:
-                if button.isChecked():
-                    self.filters['genre'] = genre
-                    break
-            
-            self.filters['properties'] = []
-            for prop, checkbox in self.properties_checkboxes.items():
-                if checkbox.isChecked():
-                    self.filters['properties'].append(prop)
-            
-            self.filters['relationship'] = []
-            for rel, checkbox in self.relationship_checkboxes.items():
-                if checkbox.isChecked():
-                    self.filters['relationship'].append(rel)
-            
-            self.filters['character_setting'] = []
-            for char, checkbox in self.character_checkboxes.items():
-                if checkbox.isChecked():
-                    self.filters['character_setting'].append(char)
-            
-            self.filters['appearance_body'] = []
-            for app, checkbox in self.appearance_checkboxes.items():
-                if checkbox.isChecked():
-                    self.filters['appearance_body'].append(app)
-            
-            self.filters['scene_location'] = []
-            for scene, checkbox in self.scene_checkboxes.items():
-                if checkbox.isChecked():
-                    self.filters['scene_location'].append(scene)
-            
-            self.filters['story_plot'] = []
-            for story, checkbox in self.story_checkboxes.items():
-                if checkbox.isChecked():
-                    self.filters['story_plot'].append(story)
-            
-            self.filters['sexual_position'] = []
-            for pos, checkbox in self.position_checkboxes.items():
-                if checkbox.isChecked():
-                    self.filters['sexual_position'].append(pos)
-            
-            for sort, button in self.sort_buttons:
-                if button.isChecked():
-                    self.filters['sort'] = sort
-                    break
-            
-            for date, button in self.date_buttons:
-                if button.isChecked():
-                    self.filters['date'] = date
-                    break
-            
-            for duration, button in self.duration_buttons:
-                if button.isChecked():
-                    self.filters['duration'] = duration
-                    break
-            
-            gui_logger.info(f"成功保存筛选条件: {self.filters}")
-            self.accept()
-        except Exception as e:
-            gui_logger.error(f"保存筛选条件失败: {e}")
-    
-    def get_filters(self):
-        return self.filters
+
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None, settings=None):
@@ -573,7 +279,9 @@ class SettingsDialog(QDialog):
         
         self.settings = settings or {
             'download_mode': 'multi_thread',
-            'num_threads': 4
+            'num_threads': 4,
+            'download_quality': '最高',  # 新增：批量下载画质选择，默认最高
+            'download_path': os.path.join(os.getcwd(), 'hamineDownload')  # 新增：下载位置，默认在当前文件夹下的hamineDownload目录
         }
         
         self.init_ui()
@@ -609,6 +317,23 @@ class SettingsDialog(QDialog):
         threads_group.setLayout(threads_layout)
         layout.addWidget(threads_group)
         
+        # 新增：下载画质设置
+        quality_group = QGroupBox("批量下载画质")
+        quality_layout = QVBoxLayout()
+        
+        self.quality_high_radio = QRadioButton("最高")
+        self.quality_low_radio = QRadioButton("最低")
+        
+        if self.settings.get('download_quality', '最高') == '最高':
+            self.quality_high_radio.setChecked(True)
+        else:
+            self.quality_low_radio.setChecked(True)
+        
+        quality_layout.addWidget(self.quality_high_radio)
+        quality_layout.addWidget(self.quality_low_radio)
+        quality_group.setLayout(quality_layout)
+        layout.addWidget(quality_group)
+        
         self.multi_thread_radio.toggled.connect(self.on_download_mode_changed)
         self.single_thread_radio.toggled.connect(self.on_download_mode_changed)
         self.on_download_mode_changed()
@@ -621,6 +346,33 @@ class SettingsDialog(QDialog):
         clear_logs_layout.addWidget(self.clear_logs_button)
         clear_logs_group.setLayout(clear_logs_layout)
         layout.addWidget(clear_logs_group)
+        
+        # 新增：下载位置设置
+        download_path_group = QGroupBox("下载位置")
+        download_path_layout = QVBoxLayout()
+        
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("下载位置:"))
+        self.download_path_edit = QLineEdit(self.settings.get('download_path', ''))
+        path_layout.addWidget(self.download_path_edit, 1)
+        
+        self.browse_button = QPushButton("浏览...")
+        self.browse_button.clicked.connect(self.browse_download_path)
+        path_layout.addWidget(self.browse_button)
+        
+        download_path_layout.addLayout(path_layout)
+        download_path_group.setLayout(download_path_layout)
+        layout.addWidget(download_path_group)
+        
+        # 新增：缓存管理
+        cache_group = QGroupBox("缓存管理")
+        cache_layout = QVBoxLayout()
+        
+        self.clear_cache_button = QPushButton("清除缓存")
+        self.clear_cache_button.clicked.connect(self.clear_cache)
+        cache_layout.addWidget(self.clear_cache_button)
+        cache_group.setLayout(cache_layout)
+        layout.addWidget(cache_group)
         
         button_layout = QHBoxLayout()
         self.save_button = QPushButton("保存")
@@ -653,10 +405,27 @@ class SettingsDialog(QDialog):
                 'num_threads': 4
             }
     
+    def browse_download_path(self):
+        """
+        浏览并选择下载位置
+        """
+        from PyQt5.QtWidgets import QFileDialog
+        
+        # 打开文件夹选择对话框
+        folder = QFileDialog.getExistingDirectory(self, "选择下载位置", self.download_path_edit.text())
+        if folder:
+            self.download_path_edit.setText(folder)
+    
     def save_settings(self):
         try:
             self.settings['download_mode'] = 'multi_thread' if self.multi_thread_radio.isChecked() else 'single_thread'
             self.settings['num_threads'] = self.threads_spinbox.value()
+            self.settings['download_quality'] = '最高' if self.quality_high_radio.isChecked() else '最低'  # 保存画质设置
+            self.settings['download_path'] = self.download_path_edit.text()  # 保存下载位置设置
+            
+            # 确保下载目录存在
+            if not os.path.exists(self.settings['download_path']):
+                os.makedirs(self.settings['download_path'], exist_ok=True)
             
             import json
             with open('settings.json', 'w', encoding='utf-8') as f:
@@ -673,26 +442,153 @@ class SettingsDialog(QDialog):
     def clear_logs(self):
         try:
             import os
+            import logging
             from PyQt5.QtWidgets import QMessageBox
             
-            log_files = ["hanime1_gui.log", "hanime1_api.log"]
+            # 先关闭所有日志处理器，释放文件句柄
+            for handler in logging.root.handlers[:]:
+                logging.root.removeHandler(handler)
+                handler.close()
+            
+            # 只清除实际存在的日志文件
+            log_files = ["hanime1_gui.log"]  # 只有gui配置了日志
             deleted_files = []
             
             for log_file in log_files:
                 if os.path.exists(log_file):
-                    os.remove(log_file)
-                    deleted_files.append(log_file)
-                    gui_logger.debug(f"已删除日志文件: {log_file}")
+                    try:
+                        os.remove(log_file)
+                        deleted_files.append(log_file)
+                    except Exception as file_error:
+                        # 使用print而不是logger记录，因为logger可能已关闭
+                        print(f"删除日志文件失败: {log_file}, 错误: {str(file_error)}")
             
             if deleted_files:
                 QMessageBox.information(self, "清除日志", f"成功清除以下日志文件:\n{', '.join(deleted_files)}")
             else:
                 QMessageBox.information(self, "清除日志", "没有找到日志文件")
             
+            # 重新初始化日志记录器
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                filename='hanime1_gui.log',
+                filemode='a'
+            )
+            
         except Exception as e:
-            gui_logger.error(f"清除日志失败: {e}")
+            # 使用print而不是logger记录，因为logger可能有问题
+            print(f"清除日志失败: {e}")
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(self, "清除日志失败", f"清除日志时发生错误:\n{str(e)}")
+    
+    def clear_cache(self):
+        """
+        清除缓存
+        """
+        try:
+            from PyQt5.QtWidgets import QMessageBox
+            import os
+            import shutil
+            
+            # 清除API缓存
+            from hanime1_api import Hanime1API
+            api = Hanime1API()
+            api.clear_cache()
+            
+            # 清除缓存目录
+            cache_dir = "cache"
+            if os.path.exists(cache_dir):
+                shutil.rmtree(cache_dir)
+                os.makedirs(cache_dir)  # 重新创建空的缓存目录
+            
+            QMessageBox.information(self, "清除缓存", "成功清除所有缓存")
+        except Exception as e:
+            # 使用print而不是logger记录，因为logger可能有问题
+            print(f"清除缓存失败: {e}")
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "清除缓存失败", f"清除缓存时发生错误:\n{str(e)}")
+
+class AnnouncementDialog(QDialog):
+    def __init__(self, parent=None, first_run=False, announcement=None):
+        super().__init__(parent)
+        self.first_run = first_run
+        self.announcement = announcement or {
+            'title': '欢迎使用Hanime1视频工具',
+            'content': '这是一个用于搜索和下载Hanime1视频的工具。\n\n使用说明：\n1. 在搜索框中输入关键词或视频ID进行搜索\n2. 选择视频查看详情\n3. 点击下载按钮下载视频\n\n请注意遵守相关法律法规，合理使用本工具。\n\n仅用于学习，请在24小时内删除。'
+        }
+        
+        self.setWindowTitle(self.announcement['title'])
+        self.setModal(True)
+        if self.first_run:
+            self.setWindowFlags(Qt.WindowCloseButtonHint)
+        else:
+            self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # 使用滚动区域确保所有内容都能显示
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # 公告内容容器
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        
+        # 公告内容
+        content_label = QLabel(self.announcement['content'])
+        content_label.setWordWrap(True)
+        content_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        content_label.setMinimumHeight(150)
+        content_layout.addWidget(content_label)
+        
+        scroll_area.setWidget(content_widget)
+        layout.addWidget(scroll_area, 1)  # 占主要空间
+        
+        # 分隔线
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line)
+        
+        # 按钮布局
+        button_layout = QHBoxLayout()
+        
+        if self.first_run:
+            # 首次启动模式：退出和同意按钮
+            button_layout.addStretch()
+            
+            exit_button = QPushButton("退出")
+            exit_button.clicked.connect(self.on_exit)
+            button_layout.addWidget(exit_button)
+            
+            agree_button = QPushButton("同意")
+            agree_button.clicked.connect(self.on_agree)
+            agree_button.setDefault(True)
+            button_layout.addWidget(agree_button)
+        else:
+            # 后续启动模式：只有关闭按钮
+            button_layout.addStretch()
+        
+        layout.addLayout(button_layout)
+        
+        # 移除固定大小，改用合适的初始大小
+        self.resize(500, 350)
+    
+    def on_exit(self):
+        # 退出程序
+        QApplication.instance().quit()
+    
+    def on_agree(self):
+        # 标记为已同意，关闭对话框
+        self.accept()
 
 class Hanime1GUI(QMainWindow):
     def __init__(self):
@@ -708,7 +604,9 @@ class Hanime1GUI(QMainWindow):
         
         self.settings = {
             'download_mode': 'multi_thread',
-            'num_threads': 4
+            'num_threads': 4,
+            'download_quality': '最高',
+            'download_path': os.path.join(os.getcwd(), 'hamineDownload')
         }
         self.load_settings()
         
@@ -755,11 +653,8 @@ class Hanime1GUI(QMainWindow):
         search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("请输入搜索关键词...")
+        self.search_input.returnPressed.connect(self.search_videos)  # 回车直接搜索
         search_layout.addWidget(self.search_input, 1)
-        
-        self.filter_button = QPushButton("筛选")
-        self.filter_button.clicked.connect(self.show_filter_dialog)
-        search_layout.addWidget(self.filter_button)
         
         self.search_button = QPushButton("搜索")
         self.search_button.clicked.connect(self.search_videos)
@@ -775,19 +670,14 @@ class Hanime1GUI(QMainWindow):
         page_layout.addWidget(self.page_spinbox)
         left_layout.addLayout(page_layout)
         
-        self.batch_download_button = QPushButton("批量下载搜索结果")
-        self.batch_download_button.clicked.connect(self.on_batch_download)
-        left_layout.addWidget(self.batch_download_button)
+
         
         self.settings_button = QPushButton("设置")
         self.settings_button.clicked.connect(self.show_settings)
         left_layout.addWidget(self.settings_button)
         
-        from PyQt5.QtWidgets import QCheckBox
-        self.proxy_checkbox = QCheckBox("启用代理")
-        self.proxy_checkbox.setChecked(False)
-        self.proxy_checkbox.stateChanged.connect(self.on_proxy_toggled)
-        left_layout.addWidget(self.proxy_checkbox)
+        # 默认启用代理，不再显示代理开关
+        self.api.enable_proxy()
         
         from PyQt5.QtWidgets import QTabWidget
         tab_widget = QTabWidget()
@@ -796,12 +686,14 @@ class Hanime1GUI(QMainWindow):
         self.video_list.itemClicked.connect(self.on_video_selected)
         self.video_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.video_list.customContextMenuRequested.connect(self.show_video_context_menu)
+        self.video_list.setSelectionMode(QListWidget.ExtendedSelection)  # 支持按住左键滑动多选
         tab_widget.addTab(self.video_list, "搜索结果")
         
         self.favorites_list = QListWidget()
         self.favorites_list.itemClicked.connect(self.on_favorite_selected)
         self.favorites_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.favorites_list.customContextMenuRequested.connect(self.show_favorite_context_menu)
+        self.favorites_list.setSelectionMode(QListWidget.ExtendedSelection)  # 支持按住左键滑动多选
         tab_widget.addTab(self.favorites_list, "收藏夹")
         
         self.update_favorites_list()
@@ -964,11 +856,8 @@ class Hanime1GUI(QMainWindow):
     def on_search_complete(self, search_result):
         gui_logger.debug(f"搜索结果回调，结果类型: {type(search_result)}")
         if search_result and search_result['videos']:
-            original_videos = search_result['videos']
-            gui_logger.info(f"原始搜索结果: {len(original_videos)} 个视频")
-            
-            filtered_videos = self.apply_client_filters(original_videos)
-            gui_logger.info(f"应用筛选后: {len(filtered_videos)} 个视频")
+            filtered_videos = search_result['videos']
+            gui_logger.info(f"搜索结果: {len(filtered_videos)} 个视频")
             
             self.current_search_results = filtered_videos
             self.video_list.clear()
@@ -983,58 +872,7 @@ class Hanime1GUI(QMainWindow):
             gui_logger.info(f"未找到视频结果，关键词: {query}")
             self.statusBar().showMessage("未找到视频结果")
     
-    def apply_client_filters(self, videos):
-        gui_logger.debug(f"客户端筛选条件: {self.filters}")
-        
-        has_detailed_filters = any(
-            self.filters.get(key, [])
-            for key in ['properties', 'relationship', 'character_setting', 
-                       'appearance_body', 'scene_location', 'story_plot', 'sexual_position']
-        )
-        
-        if not has_detailed_filters:
-            gui_logger.debug(f"没有设置详细筛选条件，直接返回所有 {len(videos)} 个结果")
-            return videos
-        
-        filtered_videos = []
-        
-        for video in videos:
-            try:
-                video_info = self.api.get_video_info(video['video_id'])
-                if not video_info:
-                    continue
-                
-                matches = True
-                
-                all_filter_tags = set()
-                
-                all_filter_tags.update(self.filters.get('properties', []))
-                all_filter_tags.update(self.filters.get('relationship', []))
-                all_filter_tags.update(self.filters.get('character_setting', []))
-                all_filter_tags.update(self.filters.get('appearance_body', []))
-                all_filter_tags.update(self.filters.get('scene_location', []))
-                all_filter_tags.update(self.filters.get('story_plot', []))
-                all_filter_tags.update(self.filters.get('sexual_position', []))
-                
-                video_tags = set(video_info.get('tags', []))
-                gui_logger.debug(f"视频 {video['video_id']} 标签: {video_tags}")
-                gui_logger.debug(f"需要匹配的筛选标签: {all_filter_tags}")
-                
-                if not all_filter_tags.issubset(video_tags):
-                    matches = False
-                
-                if matches:
-                    filtered_videos.append(video)
-                    gui_logger.debug(f"视频 {video['video_id']} 匹配筛选条件")
-                else:
-                    gui_logger.debug(f"视频 {video['video_id']} 不匹配筛选条件")
-                    
-            except Exception as e:
-                gui_logger.error(f"获取视频 {video['video_id']} 详情失败: {e}")
-                continue
-        
-        gui_logger.debug(f"应用客户端筛选后，结果数量: {len(filtered_videos)}/{len(videos)}")
-        return filtered_videos
+
     
     def on_search_error(self, error):
         gui_logger.error(f"搜索出错: {error}")
@@ -1054,6 +892,25 @@ class Hanime1GUI(QMainWindow):
     def get_video_info(self, video_id):
         gui_logger.info(f"开始获取视频信息，视频ID: {video_id}")
         self.statusBar().showMessage(f"正在获取视频 {video_id} 的信息...")
+        
+        # 清空所有显示的信息，显示加载中状态
+        self.title_label.setText("加载中...")
+        self.chinese_title_label.setText("加载中...")
+        self.views_label.setText("加载中...")
+        self.upload_date_label.setText("加载中...")
+        self.likes_label.setText("加载中...")
+        self.tags_label.setText("加载中...")
+        self.description_text.setText("加载中...")
+        
+        # 清空封面信息
+        self.current_cover_url = ""
+        self.view_cover_button.setEnabled(False)
+        
+        # 清空相关视频列表
+        self.related_list.clear()
+        
+        # 清空视频源链接
+        self.update_source_links([])
         
         worker = GetVideoInfoWorker(
             api=self.api,
@@ -1220,17 +1077,7 @@ class Hanime1GUI(QMainWindow):
         self.load_settings()
         gui_logger.info(f"设置已更新: {self.settings}")
     
-    def show_filter_dialog(self):
-        self.filters['keyword'] = self.search_input.text().strip()
-        
-        dialog = FilterDialog(self, self.filters)
-        result = dialog.exec_()
-        if result == QDialog.Accepted:
-            self.filters = dialog.get_filters()
-            self.search_input.setText(self.filters['keyword'])
-            gui_logger.info(f"筛选条件已更新: {self.filters}")
-            self.statusBar().showMessage(f"筛选条件已更新，正在搜索...")
-            self.search_videos()
+
     
     def add_to_favorites(self, video):
         for fav in self.favorites:
@@ -1280,78 +1127,110 @@ class Hanime1GUI(QMainWindow):
                 source = self.current_video_info['video_sources'][source_index]
                 gui_logger.info(f"用户选择视频源: {source['url']}")
     
-    def on_favorite_selected(self, item):
+    def extract_video_id(self, item):
+        """
+        从列表项中提取视频ID
+        :param item: QListWidgetItem对象
+        :return: 视频ID或None
+        """
         text = item.text()
-        gui_logger.debug(f"收藏夹视频被点击: {text}")
         import re
         match = re.search(r'\[(\d+)\]', text)
         if match:
-            video_id = match.group(1)
-            gui_logger.info(f"用户点击收藏夹视频，视频ID: {video_id}")
+            return match.group(1)
+        return None
+    
+    def on_favorite_selected(self, item):
+        video_id = self.extract_video_id(item)
+        if video_id:
+            gui_logger.info(f"用户选择收藏夹视频: {video_id}")
             self.get_video_info(video_id)
         else:
             gui_logger.error(f"无法从文本中提取视频ID: {text}")
     
     def show_video_context_menu(self, position):
-        item = self.video_list.itemAt(position)
-        if not item:
+        selected_items = self.video_list.selectedItems()
+        if not selected_items:
             return
         
         menu = QMenu()
         
-        add_to_favorites_action = QAction("添加到收藏夹", self)
-        add_to_favorites_action.triggered.connect(lambda: self.on_add_to_favorites_from_menu(item))
-        menu.addAction(add_to_favorites_action)
+        # 多选添加到收藏夹
+        if len(selected_items) == 1:
+            # 单个选择时，保留原来的添加到收藏夹
+            add_to_favorites_action = QAction("添加到收藏夹", self)
+            add_to_favorites_action.triggered.connect(lambda: self.on_add_to_favorites_from_menu(selected_items[0]))
+            menu.addAction(add_to_favorites_action)
+        else:
+            # 多选时，添加批量添加到收藏夹
+            add_to_favorites_action = QAction("批量添加到收藏夹", self)
+            add_to_favorites_action.triggered.connect(lambda: self.on_batch_add_to_favorites(selected_items))
+            menu.addAction(add_to_favorites_action)
         
-        open_browser_action = QAction("用浏览器打开", self)
-        open_browser_action.triggered.connect(lambda: self.on_open_video_in_browser(item))
-        menu.addAction(open_browser_action)
+        # 批量下载
+        batch_download_action = QAction("批量下载", self)
+        batch_download_action.triggered.connect(lambda: self.on_batch_download_from_menu(selected_items))
+        menu.addAction(batch_download_action)
+        
+        # 用浏览器打开（只支持单个）
+        if len(selected_items) == 1:
+            open_browser_action = QAction("用浏览器打开", self)
+            open_browser_action.triggered.connect(lambda: self.on_open_video_in_browser(selected_items[0]))
+            menu.addAction(open_browser_action)
         
         menu.exec_(self.video_list.viewport().mapToGlobal(position))
     
     def show_favorite_context_menu(self, position):
-        item = self.favorites_list.itemAt(position)
-        if not item:
+        selected_items = self.favorites_list.selectedItems()
+        if not selected_items:
             return
         
         menu = QMenu()
         
-        view_details_action = QAction("查看详情", self)
-        view_details_action.triggered.connect(lambda: self.on_favorite_selected(item))
-        menu.addAction(view_details_action)
+        # 查看详情（只支持单个）
+        if len(selected_items) == 1:
+            view_details_action = QAction("查看详情", self)
+            view_details_action.triggered.connect(lambda: self.on_favorite_selected(selected_items[0]))
+            menu.addAction(view_details_action)
         
-        remove_from_favorites_action = QAction("从收藏夹移除", self)
-        remove_from_favorites_action.triggered.connect(lambda: self.on_remove_from_favorites_from_menu(item))
+        # 从收藏夹移除（支持多选）
+        if len(selected_items) == 1:
+            remove_from_favorites_action = QAction("从收藏夹移除", self)
+            remove_from_favorites_action.triggered.connect(lambda: self.on_remove_from_favorites_from_menu(selected_items[0]))
+        else:
+            remove_from_favorites_action = QAction("批量从收藏夹移除", self)
+            remove_from_favorites_action.triggered.connect(lambda: self.on_batch_remove_from_favorites(selected_items))
         menu.addAction(remove_from_favorites_action)
         
-        open_browser_action = QAction("用浏览器打开", self)
-        open_browser_action.triggered.connect(lambda: self.on_open_video_in_browser(item))
-        menu.addAction(open_browser_action)
+        # 批量下载
+        batch_download_action = QAction("批量下载", self)
+        batch_download_action.triggered.connect(lambda: self.on_batch_download_from_favorites(selected_items))
+        menu.addAction(batch_download_action)
+        
+        # 用浏览器打开（只支持单个）
+        if len(selected_items) == 1:
+            open_browser_action = QAction("用浏览器打开", self)
+            open_browser_action.triggered.connect(lambda: self.on_open_video_in_browser(selected_items[0]))
+            menu.addAction(open_browser_action)
         
         menu.exec_(self.favorites_list.viewport().mapToGlobal(position))
     
     def on_add_to_favorites_from_menu(self, item):
-        text = item.text()
-        import re
-        match = re.search(r'\[(\d+)\]', text)
-        if match:
-            video_id = match.group(1)
+        video_id = self.extract_video_id(item)
+        if video_id:
             for video in self.current_search_results:
                 if video['video_id'] == video_id:
                     self.add_to_favorites(video)
                     break
     
     def on_open_video_in_browser(self, item):
-        text = item.text()
-        import re
-        match = re.search(r'\[(\d+)\]', text)
-        if match:
-            video_id = match.group(1)
+        video_id = self.extract_video_id(item)
+        if video_id:
             video_url = f"https://hanime1.me/watch?v={video_id}"
             gui_logger.info(f"用浏览器打开视频页面: {video_url}")
             
-            import webbrowser
             try:
+                import webbrowser
                 webbrowser.open(video_url)
                 gui_logger.info(f"成功用浏览器打开视频页面: {video_url}")
                 self.statusBar().showMessage(f"已在浏览器中打开视频页面")
@@ -1360,12 +1239,101 @@ class Hanime1GUI(QMainWindow):
                 self.statusBar().showMessage(f"用浏览器打开失败: {str(e)}")
     
     def on_remove_from_favorites_from_menu(self, item):
-        text = item.text()
-        import re
-        match = re.search(r'\[(\d+)\]', text)
-        if match:
-            video_id = match.group(1)
+        video_id = self.extract_video_id(item)
+        if video_id:
             self.remove_from_favorites(video_id)
+    
+    def on_batch_add_to_favorites(self, items):
+        """
+        批量添加到收藏夹
+        """
+        added_count = 0
+        for item in items:
+            video_id = self.extract_video_id(item)
+            if video_id:
+                # 从搜索结果中查找视频
+                video = next((v for v in self.current_search_results if v['video_id'] == video_id), None)
+                if video:
+                    if self.add_to_favorites(video):
+                        added_count += 1
+        
+        self.statusBar().showMessage(f"成功添加 {added_count}/{len(items)} 个视频到收藏夹")
+    
+    def on_batch_remove_from_favorites(self, items):
+        """
+        批量从收藏夹移除
+        """
+        # 先收集所有要移除的视频ID，避免在遍历过程中修改列表
+        video_ids_to_remove = []
+        for item in items:
+            video_id = self.extract_video_id(item)
+            if video_id:
+                video_ids_to_remove.append(video_id)
+        
+        removed_count = 0
+        if video_ids_to_remove:
+            # 一次性移除所有视频，只更新一次列表
+            for video_id in video_ids_to_remove:
+                # 直接修改收藏夹列表，不调用remove_from_favorites避免重复更新
+                for i, fav in enumerate(self.favorites):
+                    if fav['video_id'] == video_id:
+                        self.favorites.pop(i)
+                        removed_count += 1
+                        break
+            
+            # 只保存一次
+            self.save_favorites()
+            # 只更新一次列表
+            self.update_favorites_list()
+        
+        self.statusBar().showMessage(f"成功从收藏夹移除 {removed_count}/{len(items)} 个视频")
+    
+    def on_batch_download_from_menu(self, items):
+        """
+        从搜索结果批量下载
+        """
+        self.batch_download_videos(items, source='search')
+    
+    def on_batch_download_from_favorites(self, items):
+        """
+        从收藏夹批量下载
+        """
+        self.batch_download_videos(items, source='favorites')
+    
+    def batch_download_videos(self, items, source='search'):
+        """
+        批量下载视频
+        :param items: 选中的列表项
+        :param source: 来源，'search' 或 'favorites'
+        """
+        # 提取所有选中的视频ID
+        video_ids = []
+        for item in items:
+            text = item.text()
+            import re
+            match = re.search(r'\[(\d+)\]', text)
+            if match:
+                video_ids.append(match.group(1))
+        
+        if video_ids:
+            # 使用设置中的下载画质
+            download_quality = self.settings.get('download_quality', '最高')
+            self.statusBar().showMessage(f"开始处理 {len(video_ids)} 个视频，画质: {download_quality}")
+            
+            # 逐个添加到下载队列，使用现有的add_to_download_queue方法
+            for video_id in video_ids:
+                if source == 'search':
+                    # 从搜索结果中查找视频
+                    video = next((v for v in self.current_search_results if v['video_id'] == video_id), None)
+                    if video:
+                        self.add_to_download_queue(video)
+                elif source == 'favorites':
+                    # 从收藏夹中查找视频
+                    video = next((fav for fav in self.favorites if fav['video_id'] == video_id), None)
+                    if video:
+                        self.add_to_download_queue(video)
+            
+            self.statusBar().showMessage(f"已将 {len(video_ids)} 个视频添加到下载队列")
     
     def on_download_video_from_menu(self, item):
         text = item.text()
@@ -1397,7 +1365,23 @@ class Hanime1GUI(QMainWindow):
     
     def on_video_info_for_download(self, video_info, original_video):
         if video_info and video_info['video_sources']:
-            source = video_info['video_sources'][0]
+            # 获取设置中的下载画质
+            download_quality = self.settings.get('download_quality', '最高')
+            
+            # 选择合适的视频源
+            video_sources = video_info['video_sources']
+            if video_sources:
+                if download_quality == '最高':
+                    # 选择最高画质（假设size越大，画质越高）
+                    source = max(video_sources, key=lambda x: int(x['quality'].replace('p', '')) if x['quality'] != 'unknown' else 0)
+                else:
+                    # 选择最低画质
+                    source = min(video_sources, key=lambda x: int(x['quality'].replace('p', '')) if x['quality'] != 'unknown' else 9999)
+            else:
+                # 没有可用的视频源
+                gui_logger.error(f"视频 {video_info['video_id']} 没有可用的视频源")
+                self.statusBar().showMessage(f"视频 {video_info['title'][:20]}... 没有可用的视频源")
+                return
             
             title = video_info['chinese_title']
             if not title or title.strip() == '-':
@@ -1467,8 +1451,11 @@ class Hanime1GUI(QMainWindow):
                     num_threads = 1
                     gui_logger.info("使用单线程下载")
                 
+                # 获取设置中的下载路径
+                download_path = self.settings.get('download_path', os.path.join(os.getcwd(), 'hamineDownload'))
+                
                 proxy_config = self.api.session.proxies if self.api.is_proxy_enabled() else None
-                worker = DownloadWorker(download['url'], filename, num_threads=num_threads, proxy_config=proxy_config)
+                worker = DownloadWorker(download['url'], filename, save_path=download_path, num_threads=num_threads, proxy_config=proxy_config)
                 
                 worker.signals.progress.connect(lambda progress_info, idx=index: self.on_download_progress(progress_info, idx))
                 worker.signals.finished.connect(lambda idx=index: self.on_download_finished(idx))
@@ -1560,17 +1547,7 @@ class Hanime1GUI(QMainWindow):
             
             self.on_start_download()
     
-    def on_batch_download(self):
-        if not self.current_search_results:
-            gui_logger.warning("搜索结果为空，无法批量下载")
-            self.statusBar().showMessage("搜索结果为空，无法批量下载")
-            return
-        
-        gui_logger.info(f"开始批量下载 {len(self.current_search_results)} 个视频")
-        self.statusBar().showMessage(f"开始添加 {len(self.current_search_results)} 个视频到下载队列...")
-        
-        for video in self.current_search_results:
-            self.add_to_download_queue(video)
+
     
     def show_download_context_menu(self, position):
         item = self.download_list.itemAt(position)
@@ -1796,16 +1773,55 @@ class Hanime1GUI(QMainWindow):
         gui_logger.info("资源清理完成，程序退出")
         event.accept()
     
-    def on_proxy_toggled(self, state):
-        if state == Qt.Checked:
-            self.api.enable_proxy()
-            gui_logger.info("用户启用了代理")
-        else:
-            self.api.disable_proxy()
-            gui_logger.info("用户禁用了代理")
 
 if __name__ == "__main__":
+    import os
+    import json
+    
+    # 配置文件路径
+    config_file = "hanime1_config.json"
+    
+    # 检查是否是第一次启动
+    first_run = False
+    if not os.path.exists(config_file):
+        first_run = True
+    else:
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            first_run = not config.get('has_agreed', False)
+        except:
+            first_run = True
+    
     app = QApplication(sys.argv)
-    window = Hanime1GUI()
-    window.show()
-    sys.exit(app.exec_())
+    
+    # 创建API实例获取公告
+    from hanime1_api import Hanime1API
+    api = Hanime1API()
+    announcement = api.get_remote_announcement()
+    
+    # 显示公告对话框
+    if first_run:
+        # 首次启动：显示带有退出和同意按钮的公告
+        dialog = AnnouncementDialog(first_run=True, announcement=announcement)
+        result = dialog.exec_()
+        
+        if result == QDialog.Accepted:
+            # 用户同意，记录到配置文件
+            config = {'has_agreed': True}
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            
+            # 继续启动程序
+            window = Hanime1GUI()
+            window.show()
+            sys.exit(app.exec_())
+        else:
+            # 用户取消或关闭窗口，退出程序
+            sys.exit(0)
+    else:
+        # 后续启动：只创建主窗口，不显示公告
+        window = Hanime1GUI()
+        window.show()
+        
+        sys.exit(app.exec_())
