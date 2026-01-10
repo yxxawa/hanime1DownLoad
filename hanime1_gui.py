@@ -1139,14 +1139,22 @@ class Hanime1GUI(QMainWindow):
     
     def on_remove_from_favorites(self, items):
         """从收藏夹移除"""
+        # 先收集所有要移除的视频ID，避免在遍历过程中修改列表
+        video_ids_to_remove = []
         for item in items:
             text = item.text()
             import re
             match = re.search(r'\[(\d+)]', text)
             if match:
-                video_id = match.group(1)
-                self.remove_from_favorites(video_id)
-                self.statusBar().showMessage(f"视频已从收藏夹移除")
+                video_ids_to_remove.append(match.group(1))
+        
+        # 一次性移除所有视频
+        if video_ids_to_remove:
+            self.favorites = [fav for fav in self.favorites if fav['video_id'] not in video_ids_to_remove]
+            self.save_favorites()
+            self.update_favorites_list()
+            count = len(video_ids_to_remove)
+            self.statusBar().showMessage(f"已从收藏夹移除 {count} 个视频")
     
     def on_view_favorite_info(self, items):
         """查看收藏夹视频信息"""
