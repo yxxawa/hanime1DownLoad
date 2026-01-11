@@ -6,7 +6,8 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QListWidget,
     QLabel, QPushButton, QLineEdit, QSpinBox, QProgressBar, QTextEdit,
     QGroupBox, QFormLayout, QTabWidget, QComboBox, QMenu, QAction, QDialog,
-    QCheckBox, QScrollArea, QSizePolicy, QListWidgetItem, QToolButton
+    QCheckBox, QScrollArea, QSizePolicy, QListWidgetItem, QToolButton, QRadioButton,
+    QFileDialog
 )
 from PyQt5.QtCore import Qt, QRunnable, QThreadPool, pyqtSignal, pyqtSlot, QObject
 from hanime1_api import Hanime1API
@@ -208,6 +209,121 @@ class GetVideoInfoWorker(QRunnable):
         finally:
             self.signals.finished.emit()
 
+class SettingsDialog(QDialog):
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.settings = settings.copy()
+        self.init_ui()
+    
+    def init_ui(self):
+        self.setWindowTitle("设置")
+        self.setGeometry(300, 300, 400, 400)
+        
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        
+        # 下载方式
+        download_mode_group = QGroupBox("下载方式")
+        download_mode_layout = QVBoxLayout(download_mode_group)
+        
+        self.multi_thread_radio = QRadioButton("多线程下载")
+        self.single_thread_radio = QRadioButton("单线程下载")
+        
+        if self.settings['download_mode'] == 'multi_thread':
+            self.multi_thread_radio.setChecked(True)
+        else:
+            self.single_thread_radio.setChecked(True)
+        
+        download_mode_layout.addWidget(self.multi_thread_radio)
+        download_mode_layout.addWidget(self.single_thread_radio)
+        main_layout.addWidget(download_mode_group)
+        
+        # 线程数设置
+        thread_count_group = QGroupBox("线程数设置")
+        thread_count_layout = QVBoxLayout(thread_count_group)
+        
+        thread_count_form = QFormLayout()
+        self.thread_spinbox = QSpinBox()
+        self.thread_spinbox.setMinimum(1)
+        self.thread_spinbox.setMaximum(16)
+        self.thread_spinbox.setValue(self.settings['num_threads'])
+        thread_count_form.addRow("线程数量:", self.thread_spinbox)
+        thread_count_layout.addLayout(thread_count_form)
+        main_layout.addWidget(thread_count_group)
+        
+        # 批量下载画质
+        quality_group = QGroupBox("批量下载画质")
+        quality_layout = QVBoxLayout(quality_group)
+        
+        self.highest_quality_radio = QRadioButton("最高")
+        self.lowest_quality_radio = QRadioButton("最低")
+        
+        if self.settings['download_quality'] == '最高':
+            self.highest_quality_radio.setChecked(True)
+        else:
+            self.lowest_quality_radio.setChecked(True)
+        
+        quality_layout.addWidget(self.highest_quality_radio)
+        quality_layout.addWidget(self.lowest_quality_radio)
+        main_layout.addWidget(quality_group)
+        
+        # 日志管理
+        log_group = QGroupBox("日志管理")
+        log_layout = QVBoxLayout(log_group)
+        
+        self.clear_log_button = QPushButton("清除日志")
+        self.clear_log_button.clicked.connect(self.clear_log)
+        log_layout.addWidget(self.clear_log_button)
+        main_layout.addWidget(log_group)
+        
+        # 下载位置
+        download_path_group = QGroupBox("下载位置")
+        download_path_layout = QVBoxLayout(download_path_group)
+        
+        path_layout = QHBoxLayout()
+        self.path_edit = QLineEdit(self.settings['download_path'])
+        self.browse_button = QPushButton("浏览...")
+        self.browse_button.clicked.connect(self.browse_path)
+        
+        path_layout.addWidget(self.path_edit, 1)
+        path_layout.addWidget(self.browse_button)
+        download_path_layout.addLayout(path_layout)
+        main_layout.addWidget(download_path_group)
+        
+        # 按钮组
+        button_layout = QHBoxLayout()
+        self.save_button = QPushButton("保存")
+        self.save_button.clicked.connect(self.accept)
+        
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addStretch(1)
+        button_layout.addWidget(self.save_button)
+        button_layout.addWidget(self.cancel_button)
+        main_layout.addLayout(button_layout)
+    
+    def clear_log(self):
+        try:
+            with open('hanime1_gui.log', 'w') as f:
+                f.write('')
+        except Exception as e:
+            pass
+    
+    def browse_path(self):
+        path = QFileDialog.getExistingDirectory(self, "选择下载路径", self.settings['download_path'])
+        if path:
+            self.path_edit.setText(path)
+    
+    def get_settings(self):
+        self.settings['download_mode'] = 'multi_thread' if self.multi_thread_radio.isChecked() else 'single_thread'
+        self.settings['num_threads'] = self.thread_spinbox.value()
+        self.settings['download_quality'] = '最高' if self.highest_quality_radio.isChecked() else '最低'
+        self.settings['download_path'] = self.path_edit.text()
+        return self.settings
+
+
 class DownloadWorker(QRunnable):
     def __init__(self, url, filename, save_path=".", num_threads=4):
         super().__init__()
@@ -390,13 +506,20 @@ class Hanime1GUI(QMainWindow):
         self.api = Hanime1API()
         self.threadpool = QThreadPool()
         
+        # 初始化设置
+        self.settings_file = os.path.join(os.getcwd(), 'settings.json')
         # 设置默认值
-        self.settings = {
+        self.default_settings = {
             'download_mode': 'multi_thread',
             'num_threads': 4,
             'download_quality': '最高',
             'download_path': os.path.join(os.getcwd(), 'hamineDownload')
         }
+        # 加载设置
+        self.settings = self.load_settings()
+        # 如果设置文件不存在，保存默认设置
+        if not os.path.exists(self.settings_file):
+            self.save_settings()
         
         # 搜索筛选参数
         self.filter_params = {
@@ -454,6 +577,10 @@ class Hanime1GUI(QMainWindow):
         self.search_button = QPushButton("搜索")
         self.search_button.clicked.connect(self.search_videos)
         search_layout.addWidget(self.search_button)
+        
+        self.settings_button = QPushButton("设置")
+        self.settings_button.clicked.connect(self.open_settings)
+        search_layout.addWidget(self.settings_button)
         
         left_layout.addLayout(search_layout)
         
@@ -621,6 +748,24 @@ class Hanime1GUI(QMainWindow):
         if not keyword:
             return
         
+        import re
+        # 检查是否是hanime1视频链接
+        video_link_pattern = r'https?://hanime1\.me/watch\?v=(\d+)'  # 匹配视频ID
+        match = re.search(video_link_pattern, keyword)
+        
+        if match:
+            # 提取视频ID
+            video_id = match.group(1)
+            # 直接获取视频信息，不进行搜索
+            self.statusBar().showMessage(f"正在获取视频 {video_id} 的信息...")
+            # 清空之前的搜索结果
+            self.current_search_results = []
+            self.video_list.clear()
+            # 获取视频信息
+            self.get_video_info(video_id)
+            return
+        
+        # 正常搜索流程
         page = self.page_navigation.current_page
         
         self.statusBar().showMessage(f"正在搜索: {keyword}...")
@@ -721,6 +866,14 @@ class Hanime1GUI(QMainWindow):
             
             # 视频源链接
             self.update_source_links(video_info['video_sources'])
+            
+            # 检查是否是通过视频链接直接获取的视频信息
+            if not self.current_search_results:
+                # 将当前视频添加到搜索结果列表中
+                self.current_search_results = [{"video_id": video_id, "title": video_info["title"]}]
+                # 在视频列表中添加该视频
+                self.video_list.clear()
+                self.video_list.addItem(f"[{video_id}] {video_info['title']}")
             
             self.statusBar().showMessage(f"视频 {video_id} 信息加载完成")
         else:
@@ -1006,8 +1159,16 @@ class Hanime1GUI(QMainWindow):
     def on_video_info_for_download(self, video_info):
         """为下载获取视频信息完成"""
         if video_info and video_info['video_sources']:
-            # 选择第一个视频源
-            source = video_info['video_sources'][0]
+            sources = video_info['video_sources']
+            
+            # 根据设置选择画质
+            if self.settings['download_quality'] == '最高':
+                # 选择最高画质（假设video_sources列表按画质从高到低排序）
+                source = sources[0]
+            else:
+                # 选择最低画质
+                source = sources[-1]
+            
             self.add_to_download_queue(video_info, source)
     
     def load_favorites(self):
@@ -1248,6 +1409,33 @@ class Hanime1GUI(QMainWindow):
                 self.active_downloads.pop(index)
             del self.downloads[index]
             self.update_download_list()
+    
+    def load_settings(self):
+        """加载设置"""
+        try:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            gui_logger.error(f"加载设置失败: {e}")
+        return self.default_settings.copy()
+    
+    def save_settings(self):
+        """保存设置"""
+        try:
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(self.settings, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            gui_logger.error(f"保存设置失败: {e}")
+    
+    def open_settings(self):
+        """打开设置对话框"""
+        dialog = SettingsDialog(self.settings, self)
+        if dialog.exec_():
+            new_settings = dialog.get_settings()
+            self.settings.update(new_settings)
+            self.save_settings()
+            self.statusBar().showMessage("设置已保存")
 
 def main():
     app = QApplication(sys.argv)
