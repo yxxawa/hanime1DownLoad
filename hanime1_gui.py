@@ -5,7 +5,6 @@ import re
 import threading
 import time
 import concurrent.futures
-from plyer import notification
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
     QLabel, QPushButton, QLineEdit, QSpinBox, QProgressBar, QTextEdit,
@@ -15,6 +14,9 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QRunnable, QThreadPool, pyqtSignal, pyqtSlot, QObject, QTimer
 from PyQt5.QtGui import QPixmap
 import requests
+
+
+
 from hanime1_api import Hanime1API
 
 
@@ -217,7 +219,8 @@ class SettingsDialog(QDialog):
             'download_quality': '最高',
             'download_path': os.path.join(os.getcwd(), 'hanimeDownload'),
             'file_naming_rule': '{title}',  # 文件名命名规则
-            'overwrite_existing': False  # 是否覆盖已存在的文件
+            'overwrite_existing': False,  # 是否覆盖已存在的文件
+            'cloudflare_cookie': ''  # Cloudflare Cookie
         }
         # 合并默认设置
         for key, value in self.default_settings.items():
@@ -327,7 +330,38 @@ class SettingsDialog(QDialog):
         overwrite_layout.addWidget(self.overwrite_checkbox)
         main_layout.addWidget(overwrite_group)
         
-
+        # Cloudflare Cookie设置
+        cloudflare_group = QGroupBox("Cloudflare Cookie设置")
+        cloudflare_layout = QVBoxLayout(cloudflare_group)
+        
+        cloudflare_form = QFormLayout()
+        
+        # Cloudflare Cookie输入框
+        self.cloudflare_cookie_edit = QTextEdit()
+        self.cloudflare_cookie_edit.setFixedHeight(100)
+        self.cloudflare_cookie_edit.setPlaceholderText("输入Cloudflare Cookie，格式为：cf_clearance=value")
+        self.cloudflare_cookie_edit.setPlainText(self.settings['cloudflare_cookie'])
+        cloudflare_form.addRow("Cloudflare Cookie:", self.cloudflare_cookie_edit)
+        
+        # Cookie操作按钮
+        cookie_button_layout = QHBoxLayout()
+        self.clear_cookie_button = QPushButton("清除Cookie")
+        self.clear_cookie_button.clicked.connect(self.clear_cookie)
+        
+        self.save_cookie_button = QPushButton("保存到会话")
+        self.save_cookie_button.clicked.connect(self.save_cookie_to_session)
+        
+        cookie_button_layout.addWidget(self.clear_cookie_button)
+        cookie_button_layout.addWidget(self.save_cookie_button)
+        
+        # Cookie说明
+        cookie_desc = QLabel("说明：当自动绕过失败时，可手动输入从浏览器获取的cf_clearance Cookie")
+        cookie_desc.setWordWrap(True)
+        
+        cloudflare_layout.addLayout(cloudflare_form)
+        cloudflare_layout.addLayout(cookie_button_layout)
+        cloudflare_layout.addWidget(cookie_desc)
+        main_layout.addWidget(cloudflare_group)
         
         # 按钮组
         button_layout = QHBoxLayout()
@@ -352,6 +386,66 @@ class SettingsDialog(QDialog):
         if path:
             self.path_edit.setText(path)
     
+    def clear_cookie(self):
+        """清除Cloudflare Cookie"""
+        self.cloudflare_cookie_edit.clear()
+        if hasattr(self.parent, 'api'):
+            # 清除API实例中的Cookie
+            self.parent.api.session.cookies.clear()
+            
+            # 从settings.json中移除session信息
+            if os.path.exists('settings.json'):
+                with open('settings.json', 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                
+                if 'session' in settings:
+                    del settings['session']
+                    # 保存更新后的settings
+                    with open('settings.json', 'w', encoding='utf-8') as f:
+                        json.dump(settings, f, ensure_ascii=False, indent=2)
+            
+            QMessageBox.information(self, "成功", "Cookie已清除")
+    
+
+    
+    def save_cookie_to_session(self):
+        """将输入的Cookie保存到会话中"""
+        cookie_text = self.cloudflare_cookie_edit.toPlainText().strip()
+        if not cookie_text:
+            QMessageBox.warning(self, "警告", "请先输入Cookie")
+            return
+        
+        try:
+            # 解析Cookie
+            if hasattr(self.parent, 'api'):
+                # 清除现有Cookie
+                self.parent.api.session.cookies.clear()
+                
+                # 添加新Cookie
+                if cookie_text.startswith('cf_clearance='):
+                    # 直接是cf_clearance=value格式
+                    cf_clearance = cookie_text.split('=', 1)[1]
+                    self.parent.api.session.cookies.set('cf_clearance', cf_clearance, domain='.hanime1.me', path='/')
+                else:
+                    # 尝试解析完整的Cookie字符串
+                    cookies = cookie_text.split(';')
+                    for cookie in cookies:
+                        cookie = cookie.strip()
+                        if '=' in cookie:
+                            name, value = cookie.split('=', 1)
+                            # 为所有Cookie设置正确的domain和path
+                            if name in ['cf_clearance', 'XSRF-TOKEN', 'hanime1_session', 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d']:
+                                self.parent.api.session.cookies.set(name, value, domain='.hanime1.me', path='/')
+                            else:
+                                # 其他Cookie（如Google Analytics）也添加到会话中
+                                self.parent.api.session.cookies.set(name, value, domain='.hanime1.me', path='/')
+                
+                # 保存会话
+                self.parent.api.save_session()
+                QMessageBox.information(self, "成功", "Cookie已保存到会话")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存Cookie失败: {str(e)}")
+    
     def get_settings(self):
         self.settings['download_mode'] = 'multi_thread' if self.multi_thread_radio.isChecked() else 'single_thread'
         self.settings['num_threads'] = self.thread_spinbox.value()
@@ -359,6 +453,7 @@ class SettingsDialog(QDialog):
         self.settings['download_path'] = self.path_edit.text()
         self.settings['file_naming_rule'] = self.naming_rule_combo.currentData()
         self.settings['overwrite_existing'] = self.overwrite_checkbox.isChecked()
+        self.settings['cloudflare_cookie'] = self.cloudflare_cookie_edit.toPlainText().strip()
         return self.settings
 
 
@@ -665,7 +760,10 @@ class Hanime1GUI(QMainWindow):
             'download_mode': 'multi_thread',
             'num_threads': 4,
             'download_quality': '最高',
-            'download_path': os.path.join(os.getcwd(), 'hamineDownload'),
+            'download_path': os.path.join(os.getcwd(), 'hanimeDownload'),
+            'file_naming_rule': '{title}',
+            'overwrite_existing': False,
+            'cloudflare_cookie': '',
             'window_size': {'width': 1320, 'height': 1485}
         }
         # 加载设置
@@ -673,6 +771,28 @@ class Hanime1GUI(QMainWindow):
         # 如果设置文件不存在，保存默认设置
         if not os.path.exists(self.settings_file):
             self.save_settings()
+        
+        # 应用Cloudflare Cookie到API实例
+        cloudflare_cookie = self.settings.get('cloudflare_cookie', '')
+        if cloudflare_cookie:
+            # 清除现有Cookie
+            self.api.session.cookies.clear()
+            # 添加新Cookie
+            if cloudflare_cookie.startswith('cf_clearance='):
+                # 直接是cf_clearance=value格式
+                cf_clearance = cloudflare_cookie.split('=', 1)[1]
+                self.api.session.cookies.set('cf_clearance', cf_clearance, domain='.hanime1.me')
+            else:
+                # 尝试解析完整的Cookie字符串
+                cookies = cloudflare_cookie.split(';')
+                for cookie in cookies:
+                    cookie = cookie.strip()
+                    if '=' in cookie:
+                        name, value = cookie.split('=', 1)
+                        if name == 'cf_clearance':
+                            self.api.session.cookies.set(name, value, domain='.hanime1.me')
+            # 保存会话
+            self.api.save_session()
         
         # 搜索筛选参数
         self.filter_params = {
@@ -2194,9 +2314,60 @@ class Hanime1GUI(QMainWindow):
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec_():
             new_settings = dialog.get_settings()
+            
+            # 检查Cloudflare Cookie是否有变化
+            old_cookie = self.settings.get('cloudflare_cookie', '')
+            new_cookie = new_settings.get('cloudflare_cookie', '')
+            
+            # 更新设置
             self.settings.update(new_settings)
             self.save_settings()
-            self.statusBar().showMessage("设置已保存")
+            
+            # 如果Cloudflare Cookie有变化，应用到API实例
+            if old_cookie != new_cookie:
+                # 清除现有Cookie（包括所有domain的Cookie）
+                self.api.session.cookies.clear()
+                
+                if new_cookie:
+                    # 应用新Cookie
+                    if new_cookie.startswith('cf_clearance='):
+                        # 直接是cf_clearance=value格式
+                        cf_clearance = new_cookie.split('=', 1)[1]
+                        # 确保设置正确的domain和path
+                        self.api.session.cookies.set('cf_clearance', cf_clearance, domain='.hanime1.me', path='/')
+                    else:
+                        # 尝试解析完整的Cookie字符串
+                        cookies = new_cookie.split(';')
+                        for cookie in cookies:
+                            cookie = cookie.strip()
+                            if '=' in cookie:
+                                name, value = cookie.split('=', 1)
+                                # 为所有Cookie设置正确的domain和path
+                                if name in ['cf_clearance', 'XSRF-TOKEN', 'hanime1_session', 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d']:
+                                    self.api.session.cookies.set(name, value, domain='.hanime1.me', path='/')
+                                else:
+                                    # 其他Cookie也添加到会话中
+                                    self.api.session.cookies.set(name, value, domain='.hanime1.me', path='/')
+                    # 保存会话到settings.json
+                    self.api.save_session()
+                    # 显示当前Cookie状态
+                    print(f"已应用Cookie: cf_clearance={'***' + cf_clearance[-10:] if 'cf_clearance' in locals() else '未找到'}")
+                    print(f"当前会话Cookie: {dict(self.api.session.cookies)}")
+                    self.statusBar().showMessage("设置已保存，Cloudflare Cookie已应用")
+                else:
+                    # 从settings.json中移除session信息
+                    if os.path.exists('settings.json'):
+                        with open('settings.json', 'r', encoding='utf-8') as f:
+                            settings = json.load(f)
+                        
+                        if 'session' in settings:
+                            del settings['session']
+                            # 保存更新后的settings
+                            with open('settings.json', 'w', encoding='utf-8') as f:
+                                json.dump(settings, f, ensure_ascii=False, indent=2)
+                    self.statusBar().showMessage("设置已保存，Cloudflare Cookie已清除")
+            else:
+                self.statusBar().showMessage("设置已保存")
     
     def load_download_history(self):
         """加载下载历史"""
