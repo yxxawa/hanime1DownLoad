@@ -1,26 +1,23 @@
 import sys
-import logging
 import os
 import json
+import re
+import threading
+import time
+import concurrent.futures
+from plyer import notification
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QListWidget,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
     QLabel, QPushButton, QLineEdit, QSpinBox, QProgressBar, QTextEdit,
-    QGroupBox, QFormLayout, QTabWidget, QComboBox, QMenu, QAction, QDialog,
-    QCheckBox, QScrollArea, QSizePolicy, QListWidgetItem, QToolButton, QRadioButton,
-    QFileDialog
+    QGroupBox, QFormLayout, QTabWidget, QMenu, QAction, QDialog,
+    QSizePolicy, QRadioButton, QFileDialog, QComboBox, QCheckBox, QMessageBox, QInputDialog
 )
-from PyQt5.QtCore import Qt, QRunnable, QThreadPool, pyqtSignal, pyqtSlot, QObject
+from PyQt5.QtCore import Qt, QRunnable, QThreadPool, pyqtSignal, pyqtSlot, QObject, QTimer
+from PyQt5.QtGui import QPixmap
+import requests
 from hanime1_api import Hanime1API
 
-# 设置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename='hanime1_gui.log',
-    filemode='a'
-)
 
-gui_logger = logging.getLogger('Hanime1GUI')
 
 class WorkerSignals(QObject):
     finished = pyqtSignal()
@@ -213,11 +210,25 @@ class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings.copy()
+        # 设置默认值
+        self.default_settings = {
+            'download_mode': 'multi_thread',
+            'num_threads': 4,
+            'download_quality': '最高',
+            'download_path': os.path.join(os.getcwd(), 'hanimeDownload'),
+            'file_naming_rule': '{title}',  # 文件名命名规则
+            'overwrite_existing': False  # 是否覆盖已存在的文件
+        }
+        # 合并默认设置
+        for key, value in self.default_settings.items():
+            if key not in self.settings:
+                self.settings[key] = value
+        self.parent = parent
         self.init_ui()
     
     def init_ui(self):
         self.setWindowTitle("设置")
-        self.setGeometry(300, 300, 400, 400)
+        self.setGeometry(300, 300, 450, 550)
         
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(16)
@@ -268,15 +279,6 @@ class SettingsDialog(QDialog):
         quality_layout.addWidget(self.lowest_quality_radio)
         main_layout.addWidget(quality_group)
         
-        # 日志管理
-        log_group = QGroupBox("日志管理")
-        log_layout = QVBoxLayout(log_group)
-        
-        self.clear_log_button = QPushButton("清除日志")
-        self.clear_log_button.clicked.connect(self.clear_log)
-        log_layout.addWidget(self.clear_log_button)
-        main_layout.addWidget(log_group)
-        
         # 下载位置
         download_path_group = QGroupBox("下载位置")
         download_path_layout = QVBoxLayout(download_path_group)
@@ -291,6 +293,42 @@ class SettingsDialog(QDialog):
         download_path_layout.addLayout(path_layout)
         main_layout.addWidget(download_path_group)
         
+        # 文件命名规则
+        naming_rule_group = QGroupBox("文件命名规则")
+        naming_rule_layout = QVBoxLayout(naming_rule_group)
+        
+        naming_form = QFormLayout()
+        
+        self.naming_rule_combo = QComboBox()
+        self.naming_rule_combo.addItem("仅标题", "{title}")
+        self.naming_rule_combo.addItem("[视频ID]标题", "[{video_id}] {title}")
+        
+        # 设置当前选中的命名规则
+        current_rule = self.settings['file_naming_rule']
+        index = self.naming_rule_combo.findData(current_rule)
+        if index != -1:
+            self.naming_rule_combo.setCurrentIndex(index)
+        
+        naming_form.addRow("命名规则:", self.naming_rule_combo)
+        
+        # 命名规则说明
+        rule_desc = QLabel("可用变量: {title} (视频标题), {video_id} (视频ID)")
+        rule_desc.setWordWrap(True)
+        naming_rule_layout.addLayout(naming_form)
+        naming_rule_layout.addWidget(rule_desc)
+        main_layout.addWidget(naming_rule_group)
+        
+        # 文件覆盖选项
+        overwrite_group = QGroupBox("文件覆盖选项")
+        overwrite_layout = QVBoxLayout(overwrite_group)
+        
+        self.overwrite_checkbox = QCheckBox("覆盖已存在的文件")
+        self.overwrite_checkbox.setChecked(self.settings['overwrite_existing'])
+        overwrite_layout.addWidget(self.overwrite_checkbox)
+        main_layout.addWidget(overwrite_group)
+        
+
+        
         # 按钮组
         button_layout = QHBoxLayout()
         self.save_button = QPushButton("保存")
@@ -304,12 +342,10 @@ class SettingsDialog(QDialog):
         button_layout.addWidget(self.cancel_button)
         main_layout.addLayout(button_layout)
     
-    def clear_log(self):
-        try:
-            with open('hanime1_gui.log', 'w') as f:
-                f.write('')
-        except Exception as e:
-            pass
+
+    
+    
+
     
     def browse_path(self):
         path = QFileDialog.getExistingDirectory(self, "选择下载路径", self.settings['download_path'])
@@ -321,11 +357,28 @@ class SettingsDialog(QDialog):
         self.settings['num_threads'] = self.thread_spinbox.value()
         self.settings['download_quality'] = '最高' if self.highest_quality_radio.isChecked() else '最低'
         self.settings['download_path'] = self.path_edit.text()
+        self.settings['file_naming_rule'] = self.naming_rule_combo.currentData()
+        self.settings['overwrite_existing'] = self.overwrite_checkbox.isChecked()
         return self.settings
 
 
 class DownloadWorker(QRunnable):
+    """下载工作线程，支持多线程和断点续传"""
+    
+    # 常量定义
+    USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    CHUNK_SIZE = 131072  # 下载块大小从8KB增加到128KB，减少I/O操作次数
+    MIN_CHUNK_SIZE = 1024 * 1024  # 最小块大小(1MB)，小于此值使用单线程
+    
     def __init__(self, url, filename, save_path=".", num_threads=4):
+        """初始化下载工作线程
+        
+        Args:
+            url: 下载链接
+            filename: 保存文件名
+            save_path: 保存路径
+            num_threads: 线程数量
+        """
         super().__init__()
         self.url = url
         self.filename = filename
@@ -333,170 +386,269 @@ class DownloadWorker(QRunnable):
         self.num_threads = num_threads
         self.signals = WorkerSignals()
         self.is_cancelled = False
+        self.is_paused = False
+        self.progress_lock = None
+        self.pause_event = threading.Event()
+        self.pause_event.set()  # 默认不暂停
+        
+        # 进度更新节流机制
+        self.last_progress_update = 0  # 上次更新时间
+        self.last_progress_value = 0  # 上次更新进度值
+        self.progress_update_interval = 0.1  # 更新间隔（秒）
+        self.progress_update_threshold = 1.0  # 进度变化阈值（百分比）
     
     @pyqtSlot()
     def run(self):
+        """执行下载任务"""
         try:
-            import requests
-            import os
-            import threading
-            
+            # 创建保存目录
             os.makedirs(self.save_path, exist_ok=True)
             self.full_path = os.path.join(self.save_path, self.filename)
             
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
+            # 获取文件信息
+            file_info = self._get_file_info()
+            if not file_info:
+                return
             
-            response = requests.head(self.url, headers=headers, timeout=10)
-            response.raise_for_status()
-            
-            content_length = response.headers.get('content-length')
-            total_size = int(content_length) if content_length else 0
-            
-            # 检查服务器是否支持断点续传
-            accept_ranges = response.headers.get('accept-ranges', 'none')
-            can_use_range = accept_ranges.lower() == 'bytes' and total_size > 0
-            
-            downloaded_size = 0
-            # 使用线程锁确保进度更新的线程安全
+            file_total_size, supports_range_requests = file_info
             self.progress_lock = threading.Lock()
+            downloaded_size = 0
             
-            if can_use_range:
-                # 多线程下载
-                chunk_size = total_size // self.num_threads
-                if chunk_size < 1024 * 1024:  # 小于1MB时使用单线程
-                    self.num_threads = 1
-                    chunk_size = total_size
-                
-                temp_files = []
-                for i in range(self.num_threads):
-                    temp_files.append(f"{self.full_path}.part{i}")
-                
-                ranges = []
-                for i in range(self.num_threads):
-                    start = i * chunk_size
-                    end = start + chunk_size - 1 if i < self.num_threads - 1 else total_size - 1
-                    ranges.append((start, end))
-                
-                def download_chunk_with_progress(index, range_tuple):
-                    """带进度更新的文件块下载"""
-                    start, end = range_tuple
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Range': f'bytes={start}-{end}'
-                    }
-                    
-                    temp_file_path = f"{self.full_path}.part{index}"
-                    chunk_downloaded = 0
-                    chunk_total = end - start + 1
-                    
-                    with requests.get(self.url, headers=headers, stream=True, timeout=30) as r:
-                        r.raise_for_status()
-                        with open(temp_file_path, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                if self.is_cancelled:
-                                    return {'size': 0}
-                                if chunk:
-                                    f.write(chunk)
-                                    chunk_downloaded += len(chunk)
-                                    
-                                    # 更新全局进度
-                                    with self.progress_lock:
-                                        nonlocal downloaded_size
-                                        downloaded_size += len(chunk)
-                                        current_progress = (downloaded_size / total_size) * 100
-                                        
-                                        # 实时发送进度更新
-                                        self.signals.progress.emit({
-                                            'progress': current_progress,
-                                            'filename': self.filename,
-                                            'size': downloaded_size,
-                                            'total_size': total_size
-                                        })
-                    
-                    return {'size': chunk_downloaded}
-                
-                # 使用线程池下载
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-                    future_to_chunk = {
-                        executor.submit(download_chunk_with_progress, i, ranges[i]): i 
-                        for i in range(self.num_threads)
-                    }
-                    
-                    # 等待所有任务完成
-                    concurrent.futures.wait(future_to_chunk)
-                    
-                    if self.is_cancelled:
-                        self.cleanup_temp_files(temp_files)
-                        return
-                
-                # 合并文件
-                with open(self.full_path, 'wb') as f:
-                    for temp_file in temp_files:
-                        with open(temp_file, 'rb') as tf:
-                            f.write(tf.read())
-                
-                # 清理临时文件
-                self.cleanup_temp_files(temp_files)
+            # 根据服务器支持情况选择下载方式
+            if supports_range_requests:
+                self._download_with_multithreading(file_total_size, downloaded_size)
             else:
-                # 单线程下载
-                with requests.get(self.url, headers=headers, stream=True, timeout=30) as r:
-                    r.raise_for_status()
-                    with open(self.full_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            if self.is_cancelled:
-                                return
-                            if chunk:
-                                f.write(chunk)
-                                downloaded_size += len(chunk)
-                                progress = (downloaded_size / total_size) * 100 if total_size > 0 else 0
-                                
-                                self.signals.progress.emit({
-                                    'progress': progress,
-                                    'filename': self.filename,
-                                    'size': downloaded_size,
-                                    'total_size': total_size
-                                })
+                self._download_with_singlethread(file_total_size, downloaded_size)
             
             self.signals.finished.emit()
         except Exception as e:
             self.signals.error.emit(str(e))
     
-    def download_chunk(self, index, range_tuple):
-        """下载单个文件块"""
-        import requests
+    def _get_file_info(self):
+        """获取文件信息
+        
+        Returns:
+            tuple: (文件总大小, 是否支持断点续传)
+        """
+        headers = {
+            'User-Agent': self.USER_AGENT
+        }
+        
+        response = requests.head(self.url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        content_length = response.headers.get('content-length')
+        file_total_size = int(content_length) if content_length else 0
+        
+        # 检查服务器是否支持断点续传
+        accept_ranges = response.headers.get('accept-ranges', 'none')
+        supports_range_requests = accept_ranges.lower() == 'bytes' and file_total_size > 0
+        
+        return file_total_size, supports_range_requests
+    
+    def _download_with_multithreading(self, file_total_size, downloaded_size):
+        """多线程下载
+        
+        Args:
+            file_total_size: 文件总大小
+            downloaded_size: 已下载大小
+        """
+        # 根据文件大小动态调整线程数，提高下载效率
+        # 小文件使用较少线程，大文件使用更多线程
+        if file_total_size < 10 * 1024 * 1024:  # 小于10MB
+            optimal_threads = min(self.num_threads, 2)
+        elif file_total_size < 50 * 1024 * 1024:  # 10MB-50MB
+            optimal_threads = min(self.num_threads, 4)
+        elif file_total_size < 200 * 1024 * 1024:  # 50MB-200MB
+            optimal_threads = min(self.num_threads, 8)
+        else:  # 大于200MB
+            optimal_threads = min(self.num_threads, 16)
+        
+        # 计算分块大小
+        chunk_size = file_total_size // optimal_threads
+        if chunk_size < self.MIN_CHUNK_SIZE:
+            optimal_threads = 1
+            chunk_size = file_total_size
+        
+        # 使用动态调整后的线程数
+        self.num_threads = optimal_threads
+        
+        # 准备临时文件和下载范围
+        temp_files = [f"{self.full_path}.part{i}" for i in range(self.num_threads)]
+        ranges = []
+        for i in range(self.num_threads):
+            start = i * chunk_size
+            end = start + chunk_size - 1 if i < self.num_threads - 1 else file_total_size - 1
+            ranges.append((start, end))
+        
+        # 使用可变对象存储已下载大小，以便线程间共享
+        downloaded_size_container = [0]  # 使用列表作为容器，实现引用传递
+        
+        # 使用线程池下载
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            future_to_chunk = {
+                executor.submit(self._download_chunk, i, range_tuple, file_total_size, downloaded_size_container): i 
+                for i, range_tuple in enumerate(ranges)
+            }
+            
+            # 等待所有任务完成
+            concurrent.futures.wait(future_to_chunk)
+            
+            if self.is_cancelled:
+                self._cleanup_temp_files(temp_files)
+                return
+        
+        # 合并文件
+        self._merge_files(temp_files)
+        
+        # 清理临时文件
+        self._cleanup_temp_files(temp_files)
+    
+    def _download_with_singlethread(self, file_total_size, downloaded_size):
+        """单线程下载
+        
+        Args:
+            file_total_size: 文件总大小
+            downloaded_size: 已下载大小
+        """
+        headers = {
+            'User-Agent': self.USER_AGENT
+        }
+        
+        with requests.get(self.url, headers=headers, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            with open(self.full_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=self.CHUNK_SIZE):
+                    if self.is_cancelled:
+                        return
+                    # 检查是否暂停
+                    self.pause_event.wait()  # 阻塞直到继续信号
+                    if chunk:
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                        progress = (downloaded_size / file_total_size) * 100 if file_total_size > 0 else 0
+                        
+                        # 使用节流机制更新进度
+                        if self._should_update_progress(progress):
+                            self.signals.progress.emit({
+                                'progress': progress,
+                                'filename': self.filename,
+                                'size': downloaded_size,
+                                'total_size': file_total_size
+                            })
+    
+    def _download_chunk(self, index, range_tuple, file_total_size, downloaded_size_container):
+        """下载单个文件块
+        
+        Args:
+            index: 块索引
+            range_tuple: 下载范围 (start, end)
+            file_total_size: 文件总大小
+            downloaded_size_container: 已下载大小的容器（列表，用于线程间共享）
+            
+        Returns:
+            dict: 下载结果 {'size': 下载大小}
+        """
         start, end = range_tuple
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': self.USER_AGENT,
             'Range': f'bytes={start}-{end}'
         }
         
         temp_file_path = f"{self.full_path}.part{index}"
-        chunk_downloaded = 0
+        downloaded_chunk_size = 0
         
         with requests.get(self.url, headers=headers, stream=True, timeout=30) as r:
             r.raise_for_status()
             with open(temp_file_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
+                for chunk in r.iter_content(chunk_size=self.CHUNK_SIZE):
                     if self.is_cancelled:
                         return {'size': 0}
+                    # 检查是否暂停
+                    self.pause_event.wait()  # 阻塞直到继续信号
                     if chunk:
                         f.write(chunk)
-                        chunk_downloaded += len(chunk)
+                        downloaded_chunk_size += len(chunk)
+                        
+                        # 更新全局进度
+                        with self.progress_lock:
+                            downloaded_size_container[0] += len(chunk)
+                            current_progress = (downloaded_size_container[0] / file_total_size) * 100
+                            
+                            # 使用节流机制更新进度
+                            if self._should_update_progress(current_progress):
+                                self.signals.progress.emit({
+                                    'progress': current_progress,
+                                    'filename': self.filename,
+                                    'size': downloaded_size_container[0],
+                                    'total_size': file_total_size
+                                })
         
-        return {'size': chunk_downloaded}
+        return {'size': downloaded_chunk_size}
     
-    def cleanup_temp_files(self, temp_files):
-        """清理临时文件"""
+    def _merge_files(self, temp_files):
+        """合并临时文件，优化磁盘I/O
+        
+        Args:
+            temp_files: 临时文件列表
+        """
+        with open(self.full_path, 'wb') as f:
+            for temp_file in temp_files:
+                with open(temp_file, 'rb') as tf:
+                    # 使用更大的缓冲区读取文件，减少I/O操作次数
+                    while True:
+                        chunk = tf.read(1024 * 1024)  # 1MB缓冲区
+                        if not chunk:
+                            break
+                        f.write(chunk)
+    
+    def _cleanup_temp_files(self, temp_files):
+        """清理临时文件
+        
+        Args:
+            temp_files: 临时文件列表
+        """
         for temp_file in temp_files:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
     
+    def _should_update_progress(self, current_progress):
+        """检查是否需要更新进度，实现节流机制
+        
+        Args:
+            current_progress: 当前进度值（百分比）
+            
+        Returns:
+            bool: 是否需要更新进度
+        """
+        # 计算当前时间
+        current_time = time.time()
+        
+        # 检查时间间隔和进度变化阈值
+        time_passed = current_time - self.last_progress_update
+        progress_changed = abs(current_progress - self.last_progress_value) >= self.progress_update_threshold
+        
+        if time_passed >= self.progress_update_interval or progress_changed:
+            # 更新上次更新时间和进度值
+            self.last_progress_update = current_time
+            self.last_progress_value = current_progress
+            return True
+        return False
+    
+    def pause(self):
+        """暂停下载"""
+        self.is_paused = True
+        self.pause_event.clear()
+    
+    def resume(self):
+        """恢复下载"""
+        self.is_paused = False
+        self.pause_event.set()
+    
     def cancel(self):
         """取消下载"""
         self.is_cancelled = True
+        self.pause_event.set()  # 取消时也恢复，以便线程退出
 
 
 
@@ -513,7 +665,8 @@ class Hanime1GUI(QMainWindow):
             'download_mode': 'multi_thread',
             'num_threads': 4,
             'download_quality': '最高',
-            'download_path': os.path.join(os.getcwd(), 'hamineDownload')
+            'download_path': os.path.join(os.getcwd(), 'hamineDownload'),
+            'window_size': {'width': 1320, 'height': 1485}
         }
         # 加载设置
         self.settings = self.load_settings()
@@ -537,36 +690,69 @@ class Hanime1GUI(QMainWindow):
         self.active_downloads = {}
         self.current_cover_url = ""
         
-        # 先初始化UI
+        # 初始化数据结构
+        self.favorites = {}
+        self.current_favorite_folder = '默认收藏夹'
+        self.favorites_file = os.path.join(os.getcwd(), 'favorites.json')
+        
+        self.download_history = []
+        self.history_file = os.path.join(os.getcwd(), 'download_history.json')
+        
+        # 先初始化UI，创建所有组件
         self.init_ui()
         
-        # 收藏夹相关
-        self.favorites = []
-        self.favorites_file = os.path.join(os.getcwd(), 'favorites.json')
+        # 然后加载数据
         self.load_favorites()
-        gui_logger.info("Hanime1GUI主窗口初始化完成")
+        self.load_download_history()
+        
+        # 更新列表
+        self.update_history_list()
     
     def init_ui(self):
+        """初始化用户界面"""
+        self._init_main_window()
+        self._init_left_panel()
+        self._init_right_panel()
+        self.statusBar()
+    
+    def _init_main_window(self):
+        """初始化主窗口"""
         self.setWindowTitle("Hanime1视频工具")
-        self.setGeometry(100, 100, 1200, 800)
+        
+        # 从设置中加载窗口大小
+        window_size = self.settings.get('window_size', {'width': 1320, 'height': 1485})
+        width = window_size.get('width', 1320)
+        height = window_size.get('height', 1485)
+        self.setGeometry(100, 100, width, height)
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setSpacing(16)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        
-        # 左侧布局
+        self.main_layout = QHBoxLayout(central_widget)
+        self.main_layout.setSpacing(16)
+        self.main_layout.setContentsMargins(16, 16, 16, 16)
+    
+    def _init_left_panel(self):
+        """初始化左侧面板"""
         left_widget = QWidget()
         left_widget.setMinimumWidth(350)
-        # 取消最大宽度限制，让左侧布局可以根据内容自动扩展
         left_widget.setMaximumWidth(1000)
         left_layout = QVBoxLayout(left_widget)
         left_layout.setSpacing(12)
         
-        # 搜索区域
+        self._init_search_area(left_layout)
+        self._init_page_navigation(left_layout)
+        self._init_tab_widget(left_layout)
+        
+        self.main_layout.addWidget(left_widget)
+    
+    def _init_search_area(self, parent_layout):
+        """初始化搜索区域
+        
+        Args:
+            parent_layout: 父布局
+        """
         search_title = QLabel("视频搜索")
-        left_layout.addWidget(search_title)
+        parent_layout.addWidget(search_title)
         
         search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
@@ -582,15 +768,25 @@ class Hanime1GUI(QMainWindow):
         self.settings_button.clicked.connect(self.open_settings)
         search_layout.addWidget(self.settings_button)
         
-        left_layout.addLayout(search_layout)
+        parent_layout.addLayout(search_layout)
+    
+    def _init_page_navigation(self, parent_layout):
+        """初始化页码导航
         
-        # 页码导航
-        left_layout.addWidget(QLabel("页码导航:"))
+        Args:
+            parent_layout: 父布局
+        """
+        parent_layout.addWidget(QLabel("页码导航:"))
         self.page_navigation = PageNavigationWidget()
         self.page_navigation.page_changed.connect(self.on_page_changed)
-        left_layout.addWidget(self.page_navigation)
+        parent_layout.addWidget(self.page_navigation)
+    
+    def _init_tab_widget(self, parent_layout):
+        """初始化标签页
         
-        # 标签页
+        Args:
+            parent_layout: 父布局
+        """
         tab_widget = QTabWidget()
         
         # 视频列表
@@ -602,27 +798,126 @@ class Hanime1GUI(QMainWindow):
         tab_widget.addTab(self.video_list, "搜索结果")
         
         # 收藏夹列表
+        favorites_widget = QWidget()
+        favorites_layout = QVBoxLayout(favorites_widget)
+        
+        # 收藏夹管理栏
+        favorites_manage_layout = QHBoxLayout()
+        
+        # 收藏夹选择下拉框
+        self.folder_combobox = QComboBox()
+        self.folder_combobox.currentTextChanged.connect(self.on_folder_changed)
+        favorites_manage_layout.addWidget(self.folder_combobox, 1)
+        
+        # 新建收藏夹按钮
+        new_folder_button = QPushButton("新建")
+        new_folder_button.clicked.connect(self.on_new_folder)
+        favorites_manage_layout.addWidget(new_folder_button)
+        
+        # 删除收藏夹按钮
+        delete_folder_button = QPushButton("删除")
+        delete_folder_button.clicked.connect(self.on_delete_folder)
+        favorites_manage_layout.addWidget(delete_folder_button)
+        
+        favorites_layout.addLayout(favorites_manage_layout)
+        
+        # 收藏夹搜索和操作栏
+        favorites_top_layout = QHBoxLayout()
+        
+        # 收藏夹搜索框
+        self.favorites_search_input = QLineEdit()
+        self.favorites_search_input.setPlaceholderText("在收藏夹中搜索...")
+        self.favorites_search_input.textChanged.connect(self.on_favorites_search)
+        favorites_top_layout.addWidget(self.favorites_search_input, 1)
+        
+        # 收藏夹操作按钮
+        export_favorites_button = QPushButton("导出")
+        export_favorites_button.clicked.connect(self.on_export_favorites)
+        favorites_top_layout.addWidget(export_favorites_button)
+        
+        import_favorites_button = QPushButton("导入")
+        import_favorites_button.clicked.connect(self.on_import_favorites)
+        favorites_top_layout.addWidget(import_favorites_button)
+        
+        favorites_layout.addLayout(favorites_top_layout)
+        
+        # 收藏夹列表
         self.favorites_list = QListWidget()
         self.favorites_list.itemClicked.connect(self.on_favorite_selected)
         self.favorites_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.favorites_list.customContextMenuRequested.connect(self.show_favorite_context_menu)
         self.favorites_list.setSelectionMode(QListWidget.ExtendedSelection)
-        tab_widget.addTab(self.favorites_list, "收藏夹")
+        favorites_layout.addWidget(self.favorites_list)
         
-        left_layout.addWidget(tab_widget)
+        # 刷新收藏夹列表
+        self.update_folder_combobox()
         
-        main_layout.addWidget(left_widget)
+        tab_widget.addTab(favorites_widget, "收藏夹")
         
-        # 右侧布局
+        # 下载历史
+        history_widget = QWidget()
+        history_layout = QVBoxLayout(history_widget)
+        
+        # 历史记录操作栏
+        history_top_layout = QHBoxLayout()
+        
+        # 刷新按钮
+        refresh_button = QPushButton("刷新")
+        refresh_button.clicked.connect(self.refresh_download_history)
+        history_top_layout.addWidget(refresh_button)
+        
+        # 清空按钮
+        clear_button = QPushButton("清空历史")
+        clear_button.clicked.connect(self.clear_download_history)
+        history_top_layout.addWidget(clear_button)
+        
+        history_top_layout.addStretch(1)
+        
+        history_layout.addLayout(history_top_layout)
+        
+        # 历史记录列表
+        self.history_list = QListWidget()
+        self.history_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.history_list.customContextMenuRequested.connect(self.show_history_context_menu)
+        history_layout.addWidget(self.history_list)
+        
+        tab_widget.addTab(history_widget, "下载历史")
+        
+        parent_layout.addWidget(tab_widget)
+    
+    def _init_right_panel(self):
+        """初始化右侧面板"""
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setSpacing(16)
         
-        # 视频信息区域
+        self._init_video_info_area(right_layout)
+        self._init_download_manager_area(right_layout)
+        
+        self.main_layout.addWidget(right_widget)
+    
+    def _init_video_info_area(self, parent_layout):
+        """初始化视频信息区域
+        
+        Args:
+            parent_layout: 父布局
+        """
         info_group = QGroupBox("视频信息")
         info_layout = QVBoxLayout(info_group)
         info_layout.setSpacing(8)
         
+        self._init_video_info_form(info_layout)
+        self._init_related_videos(info_layout)
+        self._init_source_links(info_layout)
+        
+        parent_layout.addWidget(info_group)
+    
+    def _init_video_info_form(self, parent_layout):
+        """初始化视频信息表单
+        
+        Args:
+            parent_layout: 父布局
+        """
         self.info_form = QFormLayout()
         self.info_form.setSpacing(5)
         self.info_form.setVerticalSpacing(8)
@@ -654,9 +949,14 @@ class Hanime1GUI(QMainWindow):
         self.info_form.addRow(QLabel("封面:"), self.view_cover_button)
         self.info_form.addRow(QLabel("描述:"), self.description_text)
         
-        info_layout.addLayout(self.info_form)
+        parent_layout.addLayout(self.info_form)
+    
+    def _init_related_videos(self, parent_layout):
+        """初始化相关视频
         
-        # 相关视频
+        Args:
+            parent_layout: 父布局
+        """
         related_group = QGroupBox("相关视频")
         related_layout = QVBoxLayout(related_group)
         related_layout.setSpacing(5)
@@ -666,11 +966,16 @@ class Hanime1GUI(QMainWindow):
         self.related_list.setMaximumHeight(200)
         self.related_list.itemClicked.connect(self.on_related_video_clicked)
         related_layout.addWidget(self.related_list)
-        info_layout.addWidget(related_group)
+        parent_layout.addWidget(related_group)
+    
+    def _init_source_links(self, parent_layout):
+        """初始化视频源链接
         
-        # 视频源链接
+        Args:
+            parent_layout: 父布局
+        """
         source_links_title = QLabel("当前视频源链接:")
-        info_layout.addWidget(source_links_title)
+        parent_layout.addWidget(source_links_title)
         
         self.source_links_widget = QWidget()
         self.source_links_widget.setMinimumHeight(150)
@@ -678,23 +983,75 @@ class Hanime1GUI(QMainWindow):
         self.source_links_layout = QVBoxLayout(self.source_links_widget)
         self.source_links_layout.setSpacing(8)
         self.source_links_layout.setContentsMargins(10, 5, 10, 5)
-        info_layout.addWidget(self.source_links_widget)
+        parent_layout.addWidget(self.source_links_widget)
+    
+    def _init_download_manager_area(self, parent_layout):
+        """初始化下载管理区域
         
-        right_layout.addWidget(info_group)
-        
-        # 下载管理区域
+        Args:
+            parent_layout: 父布局
+        """
         download_group = QGroupBox("下载管理")
         download_layout = QVBoxLayout(download_group)
         download_layout.setSpacing(8)
+        
+        self._init_download_list(download_layout)
+        self._init_download_controls(download_layout)
+        self._init_download_progress(download_layout)
+        
+        parent_layout.addWidget(download_group)
+    
+    def _init_download_list(self, parent_layout):
+        """初始化下载列表
+        
+        Args:
+            parent_layout: 父布局
+        """
+        # 创建下载列表容器
+        list_container = QWidget()
+        list_layout = QVBoxLayout(list_container)
+        
+        # 下载队列标题
+        list_layout.addWidget(QLabel("下载队列:"))
+        
+        # 下载列表和优先级按钮
+        list_with_buttons_layout = QHBoxLayout()
         
         # 下载列表
         self.download_list = QListWidget()
         self.download_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.download_list.customContextMenuRequested.connect(self.show_download_context_menu)
-        download_layout.addWidget(QLabel("下载队列:"))
-        download_layout.addWidget(self.download_list)
+        list_with_buttons_layout.addWidget(self.download_list, 1)
         
-        # 下载控制按钮
+        # 优先级调整按钮
+        priority_buttons_widget = QWidget()
+        priority_buttons_layout = QVBoxLayout(priority_buttons_widget)
+        priority_buttons_layout.setSpacing(5)
+        
+        self.move_up_button = QPushButton("上移")
+        self.move_up_button.setFixedWidth(60)
+        self.move_up_button.clicked.connect(self.on_move_up)
+        priority_buttons_layout.addWidget(self.move_up_button)
+        
+        self.move_down_button = QPushButton("下移")
+        self.move_down_button.setFixedWidth(60)
+        self.move_down_button.clicked.connect(self.on_move_down)
+        priority_buttons_layout.addWidget(self.move_down_button)
+        
+        priority_buttons_layout.addStretch()
+        
+        list_with_buttons_layout.addWidget(priority_buttons_widget)
+        
+        list_layout.addLayout(list_with_buttons_layout)
+        
+        parent_layout.addWidget(list_container)
+    
+    def _init_download_controls(self, parent_layout):
+        """初始化下载控制按钮
+        
+        Args:
+            parent_layout: 父布局
+        """
         download_control_layout = QHBoxLayout()
         download_control_layout.setSpacing(5)
         
@@ -704,6 +1061,9 @@ class Hanime1GUI(QMainWindow):
         self.pause_download_button = QPushButton("暂停下载")
         self.pause_download_button.clicked.connect(self.on_pause_download)
         
+        self.resume_download_button = QPushButton("恢复下载")
+        self.resume_download_button.clicked.connect(self.on_resume_download)
+        
         self.cancel_download_button = QPushButton("取消下载")
         self.cancel_download_button.clicked.connect(self.on_cancel_download)
         
@@ -712,12 +1072,18 @@ class Hanime1GUI(QMainWindow):
         
         download_control_layout.addWidget(self.start_download_button)
         download_control_layout.addWidget(self.pause_download_button)
+        download_control_layout.addWidget(self.resume_download_button)
         download_control_layout.addWidget(self.cancel_download_button)
         download_control_layout.addWidget(self.clear_download_button)
         
-        download_layout.addLayout(download_control_layout)
+        parent_layout.addLayout(download_control_layout)
+    
+    def _init_download_progress(self, parent_layout):
+        """初始化下载进度显示
         
-        # 下载进度
+        Args:
+            parent_layout: 父布局
+        """
         progress_layout = QVBoxLayout()
         progress_layout.setSpacing(5)
         
@@ -730,25 +1096,18 @@ class Hanime1GUI(QMainWindow):
         progress_layout.addWidget(self.download_progress)
         progress_layout.addWidget(self.download_info)
         
-        download_layout.addLayout(progress_layout)
-        
-        right_layout.addWidget(download_group)
-        
-        main_layout.addWidget(right_widget)
-        
-        self.statusBar()
+        parent_layout.addLayout(progress_layout)
     
     def on_page_changed(self, page):
         """页码变化处理"""
         self.search_videos()
     
     def search_videos(self):
-        """搜索视频"""
+        """根据关键词搜索视频"""
         keyword = self.search_input.text().strip()
         if not keyword:
             return
         
-        import re
         # 检查是否是hanime1视频链接
         video_link_pattern = r'https?://hanime1\.me/watch\?v=(\d+)'  # 匹配视频ID
         match = re.search(video_link_pattern, keyword)
@@ -859,10 +1218,26 @@ class Hanime1GUI(QMainWindow):
             
             # 相关视频
             self.related_list.clear()
-            for related in video_info['series']:
+            current_video_index = -1
+            
+            for i, related in enumerate(video_info['series']):
                 related_id = related.get('video_id', '')
                 title = related.get('chinese_title', related.get('title', f"视频 {related_id}"))
                 self.related_list.addItem(f"[{related_id}] {title}")
+                
+                # 检查是否是当前视频
+                if related_id == video_id:
+                    current_video_index = i
+            
+            # 处理当前视频高亮和可见性
+            if current_video_index >= 0:
+                # 设置当前视频项为选中状态，使用系统原生的选中样式（浅蓝色）
+                self.related_list.setCurrentRow(current_video_index)
+                current_item = self.related_list.item(current_video_index)
+                if current_item:
+                    current_item.setSelected(True)
+                # 确保当前视频可见
+                self.related_list.scrollToItem(self.related_list.item(current_video_index), QListWidget.PositionAtCenter)
             
             # 视频源链接
             self.update_source_links(video_info['video_sources'])
@@ -918,14 +1293,22 @@ class Hanime1GUI(QMainWindow):
     def add_to_download_queue(self, video_info, source):
         """添加到下载队列"""
         # 生成安全的文件名
-        import re
         safe_title = video_info['title'][:100]
         safe_title = re.sub(r'[\\/:*?"<>|]', '_', safe_title)
         safe_title = safe_title.strip(' _')
         if not safe_title:
             safe_title = f"video_{video_info['video_id']}"
         
-        filename = f"{safe_title}.mp4"
+        # 根据设置的命名规则生成文件名
+        naming_rule = self.settings.get('file_naming_rule', '{title}')
+        filename_pattern = naming_rule.format(
+            title=safe_title,
+            video_id=video_info['video_id']
+        )
+        filename = f"{filename_pattern}.mp4"
+        
+        # 新添加的任务优先级为当前队列长度（最低优先级）
+        priority = len(self.downloads)
         
         download_task = {
             'video_id': video_info['video_id'],
@@ -935,7 +1318,8 @@ class Hanime1GUI(QMainWindow):
             'progress': 0,
             'size': 0,
             'total_size': 0,
-            'source': source
+            'source': source,
+            'priority': priority
         }
         
         self.downloads.append(download_task)
@@ -955,10 +1339,11 @@ class Hanime1GUI(QMainWindow):
                 'error': '出错',
                 'cancelled': '已取消'
             }[download['status']]
-            self.download_list.addItem(f"[{download['video_id']}] {download['title'][:30]}... - {status_text} ({download['progress']:.1f}%)")
+            self.download_list.addItem(f"[{download['video_id']}] {download['title'][:30]}... - {status_text}")
     
     def on_start_download(self):
-        """开始下载"""
+        """开始下载，按照优先级顺序"""
+        # 按照优先级顺序（列表顺序）查找第一个待下载任务
         for i, download in enumerate(self.downloads):
             if download['status'] in ['pending', 'paused']:
                 self.start_download(i)
@@ -970,16 +1355,30 @@ class Hanime1GUI(QMainWindow):
             download = self.downloads[index]
             if download['status'] in ['pending', 'paused']:
                 # 生成安全的文件名
-                import re
                 safe_title = download['title'][:100]
                 safe_title = re.sub(r'[\\/:*?"<>|]', '_', safe_title)
                 safe_title = safe_title.strip(' _')
                 if not safe_title:
                     safe_title = f"video_{download['video_id']}"
-                filename = f"{safe_title}.mp4"
+                
+                # 根据设置的命名规则生成文件名
+                naming_rule = self.settings.get('file_naming_rule', '{title}')
+                filename_pattern = naming_rule.format(
+                    title=safe_title,
+                    video_id=download['video_id']
+                )
+                filename = f"{filename_pattern}.mp4"
                 
                 # 设置下载路径
                 download_path = self.settings.get('download_path', os.path.join(os.getcwd(), 'hamineDownload'))
+                
+                # 检查文件是否已存在
+                full_path = os.path.join(download_path, filename)
+                if os.path.exists(full_path) and not self.settings.get('overwrite_existing', False):
+                    self.statusBar().showMessage(f"文件 {filename} 已存在，跳过下载")
+                    download['status'] = 'error'
+                    self.update_download_list()
+                    return
                 
                 # 选择线程数
                 if self.settings['download_mode'] == 'multi_thread':
@@ -1010,7 +1409,8 @@ class Hanime1GUI(QMainWindow):
             self.downloads[index]['size'] = progress_info['size']
             self.downloads[index]['total_size'] = progress_info['total_size']
             
-            self.update_download_list()
+            # 移除进度更新时的列表重绘，避免闪烁
+            # 只在状态改变时调用update_download_list()
             
             self.download_progress.setValue(int(progress_info['progress']))
             
@@ -1021,208 +1421,140 @@ class Hanime1GUI(QMainWindow):
     def on_download_finished(self, index):
         """下载完成回调"""
         if 0 <= index < len(self.downloads):
-            download_title = self.downloads[index]['title'][:20]
+            download = self.downloads[index]
             
+            # 从活动下载中移除
             if index in self.active_downloads:
-                self.active_downloads.pop(index)
+                del self.active_downloads[index]
             
-            # 从队列中移除已完成的任务
-            self.downloads.pop(index)
+            # 添加到下载历史
+            import datetime
+            history_item = {
+                'video_id': download['video_id'],
+                'title': download['title'],
+                'filename': download.get('filename', f"video_{download['video_id']}.mp4"),
+                'download_date': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            self.download_history.append(history_item)
+            self.save_download_history()
+            self.update_history_list()
             
+            # 更新下载进度显示
+            self.download_progress.setValue(0)
+            self.download_info.setText("准备下载")
+            
+            # 显示状态栏消息
+            self.statusBar().showMessage(f"视频 {download['title'][:20]}... 下载完成")
+            
+            # 从下载队列中移除已完成的视频
+            del self.downloads[index]
+            
+            # 更新下载列表显示
             self.update_download_list()
             
-            # 清空进度显示
-            if not self.downloads:  # 队列为空时
-                self.download_progress.setValue(0)
-                self.download_info.setText("准备下载")
-            
-            self.statusBar().showMessage(f"视频 {download_title}... 下载完成，已移出队列")
-            
-            # 继续下载下一个任务
-            self.on_start_download()
+            # 检查是否还有待下载的视频，如果有，自动开始下载下一个
+            pending_downloads = [d for d in self.downloads if d['status'] in ['pending', 'paused']]
+            if pending_downloads:
+                # 直接开始下一个下载，不需要延迟，避免定时器问题
+                self.on_start_download()
     
     def on_download_error(self, error, index):
         """下载错误回调"""
         if 0 <= index < len(self.downloads):
             self.downloads[index]['status'] = 'error'
+            self.downloads[index]['error'] = str(error)
             
+            # 从活动下载中移除
             if index in self.active_downloads:
-                self.active_downloads.pop(index)
+                del self.active_downloads[index]
             
             self.update_download_list()
-            
-            self.statusBar().showMessage(f"视频 {self.downloads[index]['title'][:20]}... 下载出错: {error}")
+            self.statusBar().showMessage(f"视频下载出错: {error}")
     
     def on_pause_download(self):
-        """暂停下载"""
+        """暂停所有当前下载"""
         for index, worker in self.active_downloads.items():
-            worker.cancel()
+            # 调用worker的pause方法，实现真正的暂停
+            worker.pause()
             self.downloads[index]['status'] = 'paused'
             self.update_download_list()
             self.statusBar().showMessage(f"已暂停下载视频 {self.downloads[index]['title'][:20]}...")
-            break
+    
+    def on_resume_download(self):
+        """恢复所有当前下载"""
+        for index, worker in self.active_downloads.items():
+            # 调用worker的resume方法，恢复下载
+            worker.resume()
+            self.downloads[index]['status'] = 'downloading'
+            self.update_download_list()
+            self.statusBar().showMessage(f"已恢复下载视频 {self.downloads[index]['title'][:20]}...")
     
     def on_cancel_download(self):
-        """取消下载"""
+        """取消当前下载"""
         for index, worker in self.active_downloads.items():
             worker.cancel()
             self.downloads[index]['status'] = 'cancelled'
-            self.active_downloads.pop(index)
+            
+            # 删除本地文件
+            import os
+            file_path = os.path.join(self.settings['download_path'], self.downloads[index]['filename'])
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    pass
+            
+            del self.active_downloads[index]
             self.update_download_list()
-            self.statusBar().showMessage(f"已取消下载视频 {self.downloads[index]['title'][:20]}...")
+            self.statusBar().showMessage(f"已取消下载并删除文件: {self.downloads[index]['title'][:20]}...")
             break
     
     def on_clear_download_list(self):
-        """清空下载列表"""
-        for worker in self.active_downloads.values():
-            worker.cancel()
+        """清空下载列表（仅清空未下载的任务，保留正在下载的任务）"""
+        # 保留正在下载的任务，只清空未下载的任务
+        remaining_downloads = []
+        active_indices = list(self.active_downloads.keys())
         
-        self.downloads.clear()
-        self.active_downloads.clear()
+        for i, download in enumerate(self.downloads):
+            # 如果是活动下载，保留
+            if i in active_indices:
+                remaining_downloads.append(download)
+        
+        # 更新下载列表，重新分配优先级
+        self.downloads = remaining_downloads
+        for i, download in enumerate(self.downloads):
+            download['priority'] = i
+        
         self.update_download_list()
-        self.download_progress.setValue(0)
-        self.download_info.setText("准备下载")
-        
-        self.statusBar().showMessage("已清空下载列表")
+        self.statusBar().showMessage("已清空下载列表（正在下载的任务已保留）")
     
-    def show_cover(self):
-        """显示封面"""
-        if self.current_cover_url:
-            try:
-                from PyQt5.QtWidgets import QDialog, QVBoxLayout
-                from PyQt5.QtGui import QPixmap
-                import requests
-                
-                dialog = QDialog(self)
-                dialog.setWindowTitle("视频封面")
-                dialog.setGeometry(100, 100, 800, 600)
-                
-                layout = QVBoxLayout(dialog)
-                
-                cover_label = QLabel()
-                cover_label.setAlignment(Qt.AlignCenter)
-                
-                response = requests.get(self.current_cover_url, timeout=10)
-                response.raise_for_status()
-                
-                pixmap = QPixmap()
-                pixmap.loadFromData(response.content)
-                
-                scaled_pixmap = pixmap.scaled(780, 540, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                cover_label.setPixmap(scaled_pixmap)
-                
-                layout.addWidget(cover_label)
-                
-                dialog.exec_()
-            except Exception as e:
-                self.statusBar().showMessage(f"显示封面失败: {str(e)}")
-        else:
-            self.statusBar().showMessage("没有可用的封面")
+    def on_move_up(self):
+        """上移下载任务"""
+        current_row = self.download_list.currentRow()
+        if current_row > 0:
+            # 交换位置
+            self.downloads[current_row], self.downloads[current_row - 1] = self.downloads[current_row - 1], self.downloads[current_row]
+            # 更新优先级
+            for i, download in enumerate(self.downloads):
+                download['priority'] = i
+            # 更新列表
+            self.update_download_list()
+            # 重新选中
+            self.download_list.setCurrentRow(current_row - 1)
     
-    def on_related_video_clicked(self, item):
-        """相关视频点击回调"""
-        text = item.text()
-        import re
-        match = re.search(r'\[(\d+)\]', text)
-        if match:
-            video_id = match.group(1)
-            self.get_video_info(video_id)
-    
-    def show_video_context_menu(self, position):
-        """视频列表右键菜单"""
-        selected_items = self.video_list.selectedItems()
-        if not selected_items:
-            return
-        
-        menu = QMenu()
-        
-        # 下载选项
-        download_action = QAction("下载", self)
-        download_action.triggered.connect(lambda: self.on_download_from_menu(selected_items))
-        menu.addAction(download_action)
-        
-        menu.exec_(self.video_list.viewport().mapToGlobal(position))
-    
-    def on_download_from_menu(self, items):
-        """从菜单下载"""
-        for item in items:
-            text = item.text()
-            import re
-            match = re.search(r'\[(\d+)\]', text)
-            if match:
-                video_id = match.group(1)
-                # 先获取视频信息，然后添加到下载队列
-                worker = GetVideoInfoWorker(self.api, video_id)
-                worker.signals.result.connect(self.on_video_info_for_download)
-                self.threadpool.start(worker)
-    
-    def on_video_info_for_download(self, video_info):
-        """为下载获取视频信息完成"""
-        if video_info and video_info['video_sources']:
-            sources = video_info['video_sources']
-            
-            # 根据设置选择画质
-            if self.settings['download_quality'] == '最高':
-                # 选择最高画质（假设video_sources列表按画质从高到低排序）
-                source = sources[0]
-            else:
-                # 选择最低画质
-                source = sources[-1]
-            
-            self.add_to_download_queue(video_info, source)
-    
-    def load_favorites(self):
-        """加载收藏夹"""
-        if os.path.exists(self.favorites_file):
-            try:
-                with open(self.favorites_file, 'r', encoding='utf-8') as f:
-                    import json
-                    self.favorites = json.load(f)
-                self.update_favorites_list()
-            except Exception as e:
-                self.favorites = []
-    
-    def save_favorites(self):
-        """保存收藏夹"""
-        try:
-            with open(self.favorites_file, 'w', encoding='utf-8') as f:
-                import json
-                json.dump(self.favorites, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            pass
-    
-    def update_favorites_list(self):
-        """更新收藏夹列表显示"""
-        self.favorites_list.clear()
-        for favorite in self.favorites:
-            self.favorites_list.addItem(f"[{favorite['video_id']}] {favorite['title']}")
-    
-    def add_to_favorites(self, video_info):
-        """添加到收藏夹"""
-        # 检查是否已在收藏夹中
-        for favorite in self.favorites:
-            if favorite['video_id'] == video_info['video_id']:
-                return  # 已存在，不重复添加
-        
-        # 添加到收藏夹
-        favorite_item = {
-            'video_id': video_info['video_id'],
-            'title': video_info['title'],
-            'chinese_title': video_info.get('chinese_title', ''),
-            'thumbnail': video_info.get('thumbnail', ''),
-            'url': video_info['url']
-        }
-        
-        self.favorites.append(favorite_item)
-        self.save_favorites()
-        self.update_favorites_list()
-        self.statusBar().showMessage(f"视频 '{video_info['title'][:20]}...' 已添加到收藏夹")
-    
-    def remove_from_favorites(self, video_id):
-        """从收藏夹移除"""
-        self.favorites = [fav for fav in self.favorites if fav['video_id'] != video_id]
-        self.save_favorites()
-        self.update_favorites_list()
+    def on_move_down(self):
+        """下移下载任务"""
+        current_row = self.download_list.currentRow()
+        if current_row < len(self.downloads) - 1:
+            # 交换位置
+            self.downloads[current_row], self.downloads[current_row + 1] = self.downloads[current_row + 1], self.downloads[current_row]
+            # 更新优先级
+            for i, download in enumerate(self.downloads):
+                download['priority'] = i
+            # 更新列表
+            self.update_download_list()
+            # 重新选中
+            self.download_list.setCurrentRow(current_row + 1)
     
     def show_video_context_menu(self, position):
         """视频列表右键菜单"""
@@ -1244,34 +1576,371 @@ class Hanime1GUI(QMainWindow):
         
         menu.exec_(self.video_list.viewport().mapToGlobal(position))
     
-    def on_add_to_favorites_from_menu(self, items):
-        """从菜单添加到收藏夹"""
+    def on_download_from_menu(self, items):
+        """从菜单下载"""
         for item in items:
             text = item.text()
             import re
             match = re.search(r'\[(\d+)]\s*(.+)', text)
             if match:
                 video_id = match.group(1)
-                title = match.group(2)
+                worker = GetVideoInfoWorker(self.api, video_id)
+                worker.signals.result.connect(self.on_video_info_for_download)
+                self.threadpool.start(worker)
+    
+    def on_video_info_for_download(self, video_info):
+        """获取视频信息用于下载"""
+        if video_info and video_info['video_sources']:
+            # 选择质量最高的源进行下载
+            source = video_info['video_sources'][0]
+            self.add_to_download_queue(video_info, source)
+    
+    def load_favorites(self):
+        """加载收藏夹，支持多个收藏夹"""
+        if os.path.exists(self.favorites_file):
+            try:
+                with open(self.favorites_file, 'r', encoding='utf-8') as f:
+                    loaded_data = json.load(f)
+                    # 确保数据结构正确
+                    if isinstance(loaded_data, list):
+                        # 兼容旧版本数据结构
+                        self.favorites = {'默认收藏夹': loaded_data}
+                    else:
+                        self.favorites = loaded_data
+                        # 清理无效的收藏夹名称（如只有空格的收藏夹）
+                        invalid_folders = []
+                        for folder_name in self.favorites.keys():
+                            if not folder_name.strip():
+                                invalid_folders.append(folder_name)
+                        for folder_name in invalid_folders:
+                            del self.favorites[folder_name]
+                        # 如果清理后没有收藏夹，添加默认收藏夹
+                        if not self.favorites:
+                            self.favorites = {'默认收藏夹': []}
+            except Exception as e:
+                self.favorites = {'默认收藏夹': []}
+        else:
+            self.favorites = {'默认收藏夹': []}
+        
+        # 更新收藏夹下拉框和列表
+        self.update_folder_combobox()
+    
+    def save_favorites(self):
+        """保存收藏夹"""
+        try:
+            with open(self.favorites_file, 'w', encoding='utf-8') as f:
+                json.dump(self.favorites, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.statusBar().showMessage(f"保存收藏夹失败: {str(e)}")
+    
+    def update_favorites_list(self):
+        """更新收藏夹列表显示"""
+        # 重置搜索状态
+        if hasattr(self, '_original_favorites'):
+            delattr(self, '_original_favorites')
+        
+        self._refresh_favorites_list()
+    
+    def _refresh_favorites_list(self, filtered_favorites=None):
+        """刷新收藏夹列表
+        
+        Args:
+            filtered_favorites: 过滤后的收藏夹列表，为空则显示全部
+        """
+        self.favorites_list.clear()
+        
+        # 确保当前收藏夹存在
+        if self.current_favorite_folder not in self.favorites:
+            self.favorites[self.current_favorite_folder] = []
+        
+        # 获取要显示的收藏夹内容
+        favorites_to_show = filtered_favorites if filtered_favorites is not None else self.favorites[self.current_favorite_folder]
+        
+        for favorite in favorites_to_show:
+            self.favorites_list.addItem(f"[{favorite['video_id']}] {favorite['title']}")
+    
+    def update_folder_combobox(self):
+        """更新收藏夹下拉框"""
+        current_folder = self.folder_combobox.currentText()
+        self.folder_combobox.clear()
+        
+        # 显示所有收藏夹
+        for folder_name in self.favorites:
+            self.folder_combobox.addItem(folder_name)
+        
+        # 恢复当前选中的收藏夹
+        if current_folder and self.folder_combobox.findText(current_folder) != -1:
+            self.folder_combobox.setCurrentText(current_folder)
+        elif self.favorites:
+            # 默认选择第一个收藏夹
+            self.folder_combobox.setCurrentIndex(0)
+            self.current_favorite_folder = self.folder_combobox.currentText()
+        
+        # 更新收藏夹列表
+        self.update_favorites_list()
+    
+    def on_folder_changed(self, folder_name):
+        """切换收藏夹
+        
+        Args:
+            folder_name: 选中的收藏夹名称
+        """
+        self.current_favorite_folder = folder_name
+        self.update_favorites_list()
+    
+    def on_new_folder(self):
+        """新建收藏夹"""
+        from PyQt5.QtWidgets import QInputDialog
+        
+        # 弹出输入对话框让用户输入新收藏夹名称
+        folder_name, ok = QInputDialog.getText(self, "新建收藏夹", "请输入收藏夹名称:")
+        
+        if ok and folder_name.strip():
+            folder_name = folder_name.strip()
+            
+            # 检查收藏夹名称是否已存在
+            if folder_name in self.favorites:
+                self.statusBar().showMessage(f"收藏夹 '{folder_name}' 已存在")
+                return
+            
+            # 创建新收藏夹
+            self.favorites[folder_name] = []
+            
+            # 保存收藏夹
+            self.save_favorites()
+            
+            # 更新下拉框并选中新创建的收藏夹
+            self.update_folder_combobox()
+            self.folder_combobox.setCurrentText(folder_name)
+            
+            self.statusBar().showMessage(f"已创建收藏夹 '{folder_name}'")
+    
+    def on_delete_folder(self):
+        """删除收藏夹"""
+        from PyQt5.QtWidgets import QMessageBox
+        
+        current_folder = self.folder_combobox.currentText()
+        
+        # 不能删除默认收藏夹
+        if current_folder == '默认收藏夹':
+            QMessageBox.information(self, "提示", "默认收藏夹不能被删除")
+            return
+        
+        # 询问用户是否确定要删除
+        reply = QMessageBox.question(self, "确认删除", 
+                                     f"确定要删除收藏夹 '{current_folder}' 吗？此操作不可恢复。",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            # 删除收藏夹
+            if current_folder in self.favorites:
+                del self.favorites[current_folder]
                 
-                # 直接添加到收藏夹，不获取完整视频信息
-                favorite_item = {
-                    'video_id': video_id,
-                    'title': title,
-                    'chinese_title': '',
-                    'thumbnail': '',
-                    'url': f"https://hanime1.me/watch?v={video_id}"
-                }
+                # 保存收藏夹
+                self.save_favorites()
                 
-                # 检查是否已在收藏夹中
-                already_exists = any(fav['video_id'] == video_id for fav in self.favorites)
-                if not already_exists:
-                    self.favorites.append(favorite_item)
-                    self.save_favorites()
-                    self.update_favorites_list()
-                    self.statusBar().showMessage(f"视频 '{title[:20]}...' 已添加到收藏夹")
-                else:
-                    self.statusBar().showMessage(f"视频 '{title[:20]}...' 已在收藏夹中")
+                # 更新下拉框
+                self.update_folder_combobox()
+                
+                self.statusBar().showMessage(f"已删除收藏夹 '{current_folder}'")
+    
+    def on_favorites_search(self, text):
+        """收藏夹搜索功能
+        
+        Args:
+            text: 搜索关键词
+        """
+        if not hasattr(self, '_original_favorites'):
+            self._original_favorites = self.favorites.get(self.current_favorite_folder, [])
+        
+        if not text.strip():
+            # 搜索关键词为空，显示全部
+            self._refresh_favorites_list()
+        else:
+            # 搜索关键词不为空，过滤匹配的视频
+            search_text = text.lower()
+            filtered = [
+                favorite for favorite in self._original_favorites 
+                if search_text in favorite['title'].lower() or 
+                   search_text in favorite.get('chinese_title', '').lower() or
+                   search_text in favorite.get('video_id', '')
+            ]
+            self._refresh_favorites_list(filtered)
+    
+    def on_export_favorites(self):
+        """导出当前选中的收藏夹"""
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        
+        # 获取当前选中的收藏夹
+        current_folder = self.folder_combobox.currentText()
+        
+        # 如果没有选中收藏夹或收藏夹为空，显示提示
+        if not current_folder or current_folder not in self.favorites:
+            QMessageBox.warning(self, "提示", "请先选择一个有效的收藏夹")
+            return
+        
+        # 设置默认文件名
+        default_filename = f"{current_folder}.json"
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出收藏夹", default_filename, "JSON Files (*.json)"
+        )
+        
+        if file_path:
+            try:
+                # 只导出当前选中的收藏夹
+                export_data = {current_folder: self.favorites[current_folder]}
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(export_data, f, ensure_ascii=False, indent=2)
+                self.statusBar().showMessage(f"收藏夹 '{current_folder}' 已导出到 {file_path}")
+            except Exception as e:
+                self.statusBar().showMessage(f"导出收藏夹失败: {str(e)}")
+    
+    def on_import_favorites(self):
+        """导入收藏夹"""
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "导入收藏夹", "", "JSON Files (*.json)"
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    imported_favorites = json.load(f)
+                
+                # 处理每个导入的收藏夹
+                for folder_name, videos in imported_favorites.items():
+                    # 验证收藏夹名称是否有效
+                    if not folder_name.strip():
+                        continue
+                    
+                    # 初始处理的收藏夹名称
+                    current_folder_name = folder_name
+                    
+                    # 如果收藏夹名称已存在，询问用户如何处理
+                    if current_folder_name in self.favorites:
+                        # 创建自定义按钮的消息框
+                        msg_box = QMessageBox()
+                        msg_box.setWindowTitle("收藏夹已存在")
+                        msg_box.setText(f"收藏夹 '{current_folder_name}' 已存在，您想如何处理？")
+                        
+                        # 添加自定义按钮
+                        merge_button = msg_box.addButton("与已有收藏夹合并", QMessageBox.AcceptRole)
+                        rename_button = msg_box.addButton("重命名该收藏夹", QMessageBox.RejectRole)
+                        cancel_button = msg_box.addButton("取消", QMessageBox.RejectRole)
+                        
+                        # 设置默认按钮
+                        msg_box.setDefaultButton(merge_button)
+                        
+                        # 显示消息框并获取用户选择
+                        msg_box.exec_()
+                        clicked_button = msg_box.clickedButton()
+                        
+                        if clicked_button == cancel_button:
+                            # 用户取消导入
+                            continue
+                        elif clicked_button == merge_button:
+                            # 合并现有收藏夹
+                            existing_video_ids = {v['video_id'] for v in self.favorites[current_folder_name]}
+                            new_videos = [v for v in videos if v['video_id'] not in existing_video_ids]
+                            self.favorites[current_folder_name].extend(new_videos)
+                            continue
+                        else:  # rename_button - 重命名
+                            # 循环获取新名称，直到名称有效且不冲突
+                            while True:
+                                new_name, ok = QInputDialog.getText(
+                                    self, "重命名收藏夹",
+                                    f"请输入新的收藏夹名称（当前名称：{current_folder_name}）："
+                                )
+                                
+                                if not ok:
+                                    # 用户取消重命名
+                                    current_folder_name = None
+                                    break
+                                
+                                # 验证新名称
+                                new_name = new_name.strip()
+                                if not new_name:
+                                    QMessageBox.warning(self, "提示", "收藏夹名称不能为空")
+                                    continue
+                                
+                                if new_name == current_folder_name:
+                                    QMessageBox.warning(self, "提示", "新名称不能与原名称相同")
+                                    continue
+                                
+                                if new_name in self.favorites:
+                                    QMessageBox.warning(self, "提示", "该名称已被使用，请选择其他名称")
+                                    continue
+                                
+                                # 名称有效，使用新名称
+                                current_folder_name = new_name
+                                break
+                    
+                    # 如果用户没有取消，添加新的收藏夹
+                    if current_folder_name:
+                        self.favorites[current_folder_name] = videos
+                
+                self.save_favorites()
+                self.update_folder_combobox()
+                self.update_favorites_list()
+                self.statusBar().showMessage(f"收藏夹已从 {file_path} 导入")
+            except Exception as e:
+                self.statusBar().showMessage(f"导入收藏夹失败: {str(e)}")
+    
+    def add_to_favorites(self, video_info):
+        """添加到收藏夹，询问用户要添加到哪个收藏夹"""
+        from PyQt5.QtWidgets import QInputDialog, QMessageBox
+        
+        # 如果没有收藏夹，创建默认收藏夹
+        if not self.favorites:
+            self.favorites['默认收藏夹'] = []
+        
+        # 如果只有一个收藏夹，直接添加
+        if len(self.favorites) == 1:
+            folder_name = list(self.favorites.keys())[0]
+        else:
+            # 弹出对话框让用户选择要添加到哪个收藏夹
+            folder_names = list(self.favorites.keys())
+            folder_name, ok = QInputDialog.getItem(self, "选择收藏夹", "请选择要添加到的收藏夹:", folder_names, 0, False)
+            
+            if not ok or not folder_name:
+                return
+        
+        # 检查是否已在该收藏夹中
+        if folder_name in self.favorites:
+            for favorite in self.favorites[folder_name]:
+                if favorite['video_id'] == video_info['video_id']:
+                    QMessageBox.information(self, "提示", f"视频已在收藏夹 '{folder_name}' 中")
+                    return
+        else:
+            # 收藏夹不存在，创建新收藏夹
+            self.favorites[folder_name] = []
+        
+        # 添加到收藏夹
+        favorite_item = {
+            'video_id': video_info['video_id'],
+            'title': video_info['title'],
+            'chinese_title': video_info.get('chinese_title', ''),
+            'thumbnail': video_info.get('thumbnail', ''),
+            'url': video_info['url']
+        }
+        
+        self.favorites[folder_name].append(favorite_item)
+        self.save_favorites()
+        self.update_favorites_list()
+        self.statusBar().showMessage(f"视频 '{video_info['title'][:20]}...' 已添加到收藏夹 '{folder_name}'")
+    
+    def remove_from_favorites(self, video_id):
+        """从当前选中的收藏夹移除视频"""
+        if self.current_favorite_folder in self.favorites:
+            # 从当前选中的收藏夹中移除指定视频
+            self.favorites[self.current_favorite_folder] = [
+                fav for fav in self.favorites[self.current_favorite_folder] 
+                if fav['video_id'] != video_id
+            ]
+            self.save_favorites()
+            self.update_favorites_list()
     
     def show_favorite_context_menu(self, position):
         """收藏夹右键菜单"""
@@ -1298,6 +1967,75 @@ class Hanime1GUI(QMainWindow):
         
         menu.exec_(self.favorites_list.viewport().mapToGlobal(position))
     
+    def on_add_to_favorites_from_menu(self, items):
+        """从菜单添加到收藏夹，询问用户要添加到哪个收藏夹"""
+        from PyQt5.QtWidgets import QInputDialog, QMessageBox
+        
+        # 如果没有选择任何视频，直接返回
+        if not items:
+            return
+        
+        # 如果没有收藏夹，创建默认收藏夹
+        if not self.favorites:
+            self.favorites['默认收藏夹'] = []
+        
+        # 弹出对话框让用户选择要添加到哪个收藏夹（只弹一次）
+        folder_names = list(self.favorites.keys())
+        if len(folder_names) == 1:
+            folder_name = folder_names[0]
+        else:
+            folder_name, ok = QInputDialog.getItem(self, "选择收藏夹", "请选择要添加到的收藏夹:", folder_names, 0, False)
+            
+            if not ok or not folder_name:
+                return
+        
+        # 确保收藏夹存在
+        if folder_name not in self.favorites:
+            self.favorites[folder_name] = []
+        
+        # 统计成功添加的视频数量
+        added_count = 0
+        already_exists_count = 0
+        
+        for item in items:
+            text = item.text()
+            import re
+            match = re.search(r'\[(\d+)]\s*(.+)', text)
+            if match:
+                video_id = match.group(1)
+                title = match.group(2)
+                
+                # 检查是否已在该收藏夹中
+                already_exists = any(fav['video_id'] == video_id for fav in self.favorites[folder_name])
+                if already_exists:
+                    already_exists_count += 1
+                    continue
+                
+                # 直接添加到收藏夹，不获取完整视频信息
+                favorite_item = {
+                    'video_id': video_id,
+                    'title': title,
+                    'chinese_title': '',
+                    'thumbnail': '',
+                    'url': f"https://hanime1.me/watch?v={video_id}"
+                }
+                
+                self.favorites[folder_name].append(favorite_item)
+                added_count += 1
+        
+        # 只有在有视频被添加时才保存和更新
+        if added_count > 0:
+            self.save_favorites()
+            self.update_favorites_list()
+            
+            # 显示添加结果
+            message = f"已将 {added_count} 个视频添加到收藏夹 '{folder_name}'"
+            if already_exists_count > 0:
+                message += f"，{already_exists_count} 个视频已存在"
+            self.statusBar().showMessage(message)
+        elif already_exists_count > 0:
+            self.statusBar().showMessage(f"所有 {already_exists_count} 个视频已在收藏夹 '{folder_name}' 中")
+    
     def on_remove_from_favorites(self, items):
         """从收藏夹移除"""
         # 先收集所有要移除的视频ID，避免在遍历过程中修改列表
@@ -1311,11 +2049,26 @@ class Hanime1GUI(QMainWindow):
         
         # 一次性移除所有视频
         if video_ids_to_remove:
-            self.favorites = [fav for fav in self.favorites if fav['video_id'] not in video_ids_to_remove]
-            self.save_favorites()
-            self.update_favorites_list()
-            count = len(video_ids_to_remove)
-            self.statusBar().showMessage(f"已从收藏夹移除 {count} 个视频")
+            # 确保当前收藏夹存在
+            if self.current_favorite_folder in self.favorites:
+                # 从当前收藏夹中移除指定视频
+                self.favorites[self.current_favorite_folder] = [
+                    fav for fav in self.favorites[self.current_favorite_folder] 
+                    if fav['video_id'] not in video_ids_to_remove
+                ]
+                self.save_favorites()
+                self.update_favorites_list()
+                count = len(video_ids_to_remove)
+                self.statusBar().showMessage(f"已从收藏夹 '{self.current_favorite_folder}' 移除 {count} 个视频")
+    
+    def on_favorite_selected(self, item):
+        """收藏夹视频选择回调"""
+        text = item.text()
+        import re
+        match = re.search(r'\[(\d+)]', text)
+        if match:
+            video_id = match.group(1)
+            self.get_video_info(video_id)
     
     def on_view_favorite_info(self, items):
         """查看收藏夹视频信息"""
@@ -1341,15 +2094,6 @@ class Hanime1GUI(QMainWindow):
                 worker.signals.result.connect(self.on_video_info_for_download)
                 self.threadpool.start(worker)
     
-    def on_favorite_selected(self, item):
-        """收藏夹视频选择"""
-        text = item.text()
-        import re
-        match = re.search(r'\[(\d+)]', text)
-        if match:
-            video_id = match.group(1)
-            self.get_video_info(video_id)
-    
     def show_download_context_menu(self, position):
         """下载列表右键菜单"""
         item = self.download_list.itemAt(position)
@@ -1365,6 +2109,10 @@ class Hanime1GUI(QMainWindow):
         pause_action = QAction("暂停下载", self)
         pause_action.triggered.connect(lambda: self.on_pause_download_from_menu(item))
         menu.addAction(pause_action)
+        
+        resume_action = QAction("恢复下载", self)
+        resume_action.triggered.connect(lambda: self.on_resume_download_from_menu(item))
+        menu.addAction(resume_action)
         
         cancel_action = QAction("取消下载", self)
         cancel_action.triggered.connect(lambda: self.on_cancel_download_from_menu(item))
@@ -1385,7 +2133,7 @@ class Hanime1GUI(QMainWindow):
         """从菜单暂停下载"""
         index = self.download_list.row(item)
         if 0 <= index < len(self.downloads) and index in self.active_downloads:
-            self.active_downloads[index].cancel()
+            self.active_downloads[index].pause()
             self.downloads[index]['status'] = 'paused'
             self.update_download_list()
             self.statusBar().showMessage(f"已暂停下载视频 {self.downloads[index]['title'][:20]}...")
@@ -1417,7 +2165,7 @@ class Hanime1GUI(QMainWindow):
                 with open(self.settings_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
         except Exception as e:
-            gui_logger.error(f"加载设置失败: {e}")
+            pass
         return self.default_settings.copy()
     
     def save_settings(self):
@@ -1426,7 +2174,20 @@ class Hanime1GUI(QMainWindow):
             with open(self.settings_file, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            gui_logger.error(f"保存设置失败: {e}")
+            pass
+    
+    def closeEvent(self, event):
+        """窗口关闭事件，保存当前窗口大小"""
+        # 保存当前窗口大小
+        geometry = self.geometry()
+        self.settings['window_size'] = {
+            'width': geometry.width(),
+            'height': geometry.height()
+        }
+        self.save_settings()
+        
+        # 调用父类的closeEvent方法
+        super().closeEvent(event)
     
     def open_settings(self):
         """打开设置对话框"""
@@ -1436,6 +2197,147 @@ class Hanime1GUI(QMainWindow):
             self.settings.update(new_settings)
             self.save_settings()
             self.statusBar().showMessage("设置已保存")
+    
+    def load_download_history(self):
+        """加载下载历史"""
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    self.download_history = json.load(f)
+            except Exception as e:
+                self.download_history = []
+    
+    def save_download_history(self):
+        """保存下载历史"""
+        try:
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.download_history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            pass
+    
+    def update_history_list(self):
+        """更新下载历史列表"""
+        self.history_list.clear()
+        for item in reversed(self.download_history):
+            self.history_list.addItem(f"[{item['video_id']}] {item['title'][:30]}... - {item['download_date']}")
+    
+    def refresh_download_history(self):
+        """刷新下载历史"""
+        self.load_download_history()
+        self.update_history_list()
+    
+    def clear_download_history(self):
+        """清空下载历史"""
+        from PyQt5.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(self, "确认清空", "确定要清空所有下载历史吗？此操作不可恢复。",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            self.download_history = []
+            self.save_download_history()
+            self.update_history_list()
+            self.statusBar().showMessage("下载历史已清空")
+    
+    def show_history_context_menu(self, position):
+        """下载历史右键菜单"""
+        selected_items = self.history_list.selectedItems()
+        if not selected_items:
+            return
+        
+        menu = QMenu()
+        
+        # 查看信息选项
+        view_action = QAction("查看视频信息", self)
+        view_action.triggered.connect(lambda: self.on_view_history_video_info(selected_items))
+        menu.addAction(view_action)
+        
+        menu.exec_(self.history_list.viewport().mapToGlobal(position))
+    
+    def on_view_history_video_info(self, items):
+        """查看历史视频信息"""
+        for item in items:
+            text = item.text()
+            import re
+            match = re.search(r'\[(\d+)]', text)
+            if match:
+                video_id = match.group(1)
+                self.get_video_info(video_id)
+                break
+    
+    def show_cover(self):
+        """显示封面图片（程序内弹窗）"""
+        if not self.current_cover_url:
+            return
+        
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QMessageBox
+        from PyQt5.QtGui import QPixmap
+        from PyQt5.QtCore import Qt
+        import requests
+        
+        # 创建弹窗
+        cover_dialog = QDialog(self)
+        cover_dialog.setWindowTitle("封面预览")
+        cover_dialog.setMinimumSize(400, 500)
+        # 不设置最大尺寸，允许自由放大
+        
+        # 创建布局
+        layout = QVBoxLayout(cover_dialog)
+        
+        # 创建标签用于显示图片
+        cover_label = QLabel()
+        cover_label.setAlignment(Qt.AlignCenter)
+        cover_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(cover_label)
+        
+        try:
+            # 下载封面图片
+            response = requests.get(self.current_cover_url)
+            response.raise_for_status()
+            
+            # 加载图片到QPixmap
+            pixmap = QPixmap()
+            pixmap.loadFromData(response.content)
+            
+            if not pixmap.isNull():
+                # 缩放图片以适应窗口，保持比例
+                scaled_pixmap = pixmap.scaled(
+                    cover_label.size(), 
+                    Qt.KeepAspectRatio, 
+                    Qt.SmoothTransformation
+                )
+                cover_label.setPixmap(scaled_pixmap)
+                
+                # 连接窗口大小变化事件，重新缩放图片
+                def resize_image(event):
+                    scaled_pixmap = pixmap.scaled(
+                        cover_label.size(), 
+                        Qt.KeepAspectRatio, 
+                        Qt.SmoothTransformation
+                    )
+                    cover_label.setPixmap(scaled_pixmap)
+                    # 调用原始的resizeEvent方法
+                    QLabel.resizeEvent(cover_label, event)
+                
+                cover_label.resizeEvent = resize_image
+            else:
+                cover_label.setText("无法加载图片")
+        except Exception as e:
+            cover_label.setText(f"加载失败: {str(e)}")
+            QMessageBox.warning(self, "错误", f"无法加载封面图片: {str(e)}")
+        
+        # 显示弹窗
+        cover_dialog.exec_()
+    
+    def on_related_video_clicked(self, item):
+        """点击相关视频"""
+        text = item.text()
+        import re
+        match = re.search(r'\[(\d+)]', text)
+        if match:
+            video_id = match.group(1)
+            self.get_video_info(video_id)
+    
 
 def main():
     app = QApplication(sys.argv)
