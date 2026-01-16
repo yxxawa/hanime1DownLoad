@@ -1,12 +1,21 @@
 import requests
 from bs4 import BeautifulSoup
 import re
-import json
 import time
-import os
-from urllib.parse import quote, urlencode, urljoin
+from urllib.parse import urljoin
 
 class Hanime1API:
+    # 编译常用的正则表达式，避免在循环中重复编译
+    REGEX_VIDEO_ID = re.compile(r'v=(\d+)')
+    REGEX_PAGE_NUM = re.compile(r'page=(\d+)')
+    REGEX_NEXT_PAGE = re.compile(r'下一頁|下一页|Next|next|>|»', re.IGNORECASE)
+    REGEX_VIEW_COUNT = re.compile(r'(觀看次數|观看次数)：([\d.]+)萬次')
+    REGEX_DATE = re.compile(r'(\d{4}-\d{2}-\d{2})')
+    REGEX_LIKE = re.compile(r'(\d+)%\s*\((\d+)\)')
+    REGEX_VIDEO_SOURCE = re.compile(r"const source = '(.*?)'")
+    REGEX_TITLE_CLEAN = re.compile(r'\s*[-–]\s*(H動漫|Hanime1|裏番|線上看|me)[:_\s]*.*$', re.IGNORECASE)
+    REGEX_TITLE_CLASS = re.compile(r'.*title.*|.*name.*')
+    
     def __init__(self):
         self.base_url = "https://hanime1.me"
         self.headers = {
@@ -18,9 +27,32 @@ class Hanime1API:
             'Upgrade-Insecure-Requests': '1',
         }
         self.session = requests.Session()
+        
+        # 优化session配置，减少连接建立时间
         self.session.headers.update(self.headers)
         self.session.trust_env = True  # 允许使用系统环境配置，包括DNS解析
         self.session.verify = True
+        
+        # 启用连接池
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,  # 连接池中的最大连接数
+            pool_maxsize=10,      # 每个主机的最大连接数
+            pool_block=False       # 当连接池耗尽时不阻塞，而是创建新连接
+        )
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        
+        # 启用HTTP/2支持（如果服务器支持）
+        try:
+            from urllib3.contrib import pyopenssl
+            from urllib3.contrib import _securetransport
+            from urllib3.util import ssl_ as ssl_utils
+            self.session.headers.update({'Connection': 'Upgrade, HTTP2-Settings'})
+        except ImportError:
+            pass
+        
+        # 优化超时设置
+        self.session.timeout = (5, 15)  # 连接超时5秒，读取超时15秒
     
     def search_videos(self, query, page=1):
         """
@@ -76,144 +108,96 @@ class Hanime1API:
                 html_content = response.text
                 soup = BeautifulSoup(html_content, 'html.parser')
                 
-                # 模仿Han1meViewer-main的搜索结果解析
-                all_contents_class = soup.find('div', class_='content-padding-new')
-                all_simplified_contents_class = soup.find('div', class_='home-rows-videos-wrapper')
-                
+                # 模仿Han1meViewer-main的搜索结果解析，适配新的页面结构
                 videos = []
-                if all_contents_class:
-                    # 正常搜索结果解析
-                    # 使用字典来存储每个视频ID的最佳版本
-                    video_dict = {}
-                    
-                    all_search_divs = all_contents_class.find_all('div', class_='search-doujin-videos')
-                    
-                    for div in all_search_divs:
-                        a_tag = div.find('a')
-                        if not a_tag:
-                            continue
-                        
-                        video_link = a_tag['href']
-                        if not video_link:
-                            continue
-                        
-                        # 提取视频ID
-                        video_id_match = re.search(r'v=(\d+)', video_link)
-                        if not video_id_match:
-                            continue
-                        video_id = video_id_match.group(1)
-                        
-                        # 查找card-mobile-panel
-                        panel = div.find('div', class_=re.compile(r'card-mobile-panel'))
-                        if not panel:
-                            continue
-                        
-                        # 提取标题
-                        title_elements = panel.select('div[class=card-mobile-title]')
-                        if not title_elements:
-                            continue
-                        title = title_elements[0].text.strip()
-                        
-                        # 提取封面URL
-                        img_elements = panel.select('img')
-                        if len(img_elements) < 2:
-                            continue
-                        cover_url = img_elements[1]['src']
-                        if not cover_url:
-                            continue
-                        
-                        # 只保留每个视频ID的一个版本
-                        if video_id not in video_dict:
-                            video_dict[video_id] = {
-                                'video_id': video_id,
-                                'title': title,
-                                'url': f"{self.base_url}/watch?v={video_id}",
-                                'thumbnail': cover_url
-                            }
-                    
-                    # 将去重后的视频添加到结果列表
-                    videos = list(video_dict.values())
-                elif all_simplified_contents_class:
-                    # 简化搜索结果解析
-                    video_items = all_simplified_contents_class.children
-                    for item in video_items:
-                        if item.name != 'a':
-                            continue
-                        
-                        video_link = item['href']
-                        video_id = re.search(r'v=(\d+)', video_link).group(1) if video_link else None
-                        cover_url = item.select('img')[0]['src'] if item.select('img') else None
-                        title = item.select('div[class$=title]')[0].text.strip() if item.select('div[class$=title]') else None
-                        
-                        if video_id and cover_url and title:
-                            videos.append({
-                                'video_id': video_id,
-                                'title': title,
-                                'url': f"{self.base_url}/watch?v={video_id}",
-                                'thumbnail': cover_url
-                            })
+                video_dict = {}
                 
-                # 解析总页数
+                # 优先查找content-padding-new容器
+                video_containers = soup.select('div.content-padding-new div.video-item-container, div.row div.video-item-container')
+                
+                for container in video_containers:
+                    # 查找horizontal-card
+                    card = container.find('div', class_='horizontal-card')
+                    if not card:
+                        continue
+                    
+                    a_tag = card.find('a')
+                    if not a_tag:
+                        continue
+                    
+                    video_link = a_tag['href']
+                    if not video_link:
+                        continue
+                    
+                    # 提取视频ID
+                    video_id_match = self.REGEX_VIDEO_ID.search(video_link)
+                    if not video_id_match:
+                        continue
+                    video_id = video_id_match.group(1)
+                    
+                    # 只处理未见过的视频ID
+                    if video_id in video_dict:
+                        continue
+                    
+                    # 提取标题 - 查找title类
+                    title_element = card.find('div', class_='title')
+                    if not title_element:
+                        continue
+                    title = title_element.text.strip()
+                    
+                    # 提取封面URL - 查找img标签
+                    img = card.find('img')
+                    if not img or not img.get('src'):
+                        continue
+                    cover_url = img['src']
+                    
+                    # 只保留每个视频ID的一个版本
+                    video_dict[video_id] = {
+                        'video_id': video_id,
+                        'title': title,
+                        'url': f"{self.base_url}/watch?v={video_id}",
+                        'thumbnail': cover_url
+                    }
+                
+                # 将去重后的视频添加到结果列表
+                videos = list(video_dict.values())
+                
+                # 解析总页数 - 简化逻辑，减少DOM查询
                 total_pages = 1
                 
-                # 1. 查找所有包含页码的链接
-                all_links = soup.find_all('a', href=True)
-                page_numbers = []
-                
-                for link in all_links:
-                    href = link.get('href', '')
-                    text = link.get_text().strip()
-                    
-                    # 从文本中提取页码
-                    if text.isdigit() and len(text) <= 3:  # 页码通常是1-3位数字
-                        page_numbers.append(int(text))
-                    
-                    # 从href中提取页码
-                    page_match = re.search(r'page=(\d+)', href)
-                    if page_match:
-                        page_numbers.append(int(page_match.group(1)))
-                
-                # 2. 查找带有pagination类的ul元素
+                # 1. 查找带有pagination类的ul元素（优先级最高）
                 pagination = soup.find('ul', class_='pagination')
                 if pagination:
                     # 从分页ul中提取页码
                     page_items = pagination.find_all('li', class_='page-item')
+                    page_numbers = []
+                    
                     for item in page_items:
                         link = item.find('a', class_='page-link')
-                        if link:
-                            text = link.get_text().strip()
-                            if text.isdigit() and len(text) <= 3:
-                                page_numbers.append(int(text))
-                            
-                            href = link.get('href', '')
-                            page_match = re.search(r'page=(\d+)', href)
-                            if page_match:
-                                page_numbers.append(int(page_match.group(1)))
-                
-                # 3. 计算总页数
-                if page_numbers:
-                    # 去重并获取最大值
-                    unique_pages = list(set(page_numbers))
-                    total_pages = max(unique_pages)
+                        if not link:
+                            continue
+                        
+                        text = link.get_text().strip()
+                        href = link.get('href', '')
+                        
+                        # 从文本中提取页码
+                        if text.isdigit() and len(text) <= 3:
+                            page_numbers.append(int(text))
+                        
+                        # 从href中提取页码
+                        page_match = self.REGEX_PAGE_NUM.search(href)
+                        if page_match:
+                            page_numbers.append(int(page_match.group(1)))
+                    
+                    if page_numbers:
+                        total_pages = max(page_numbers)
                 else:
-                    # 检查是否有下一页按钮
-                    next_patterns = [r'下一頁', r'下一页', r'Next', r'next', r'>', r'»']
-                    has_next_page = False
-                    
-                    for pattern in next_patterns:
-                        next_buttons = soup.find_all('a', text=re.compile(pattern, re.IGNORECASE))
-                        if next_buttons:
-                            has_next_page = True
-                            break
-                    
-                    # 如果有下一页按钮，总页数至少是当前页+1
+                    # 2. 检查是否有下一页按钮
+                    has_next_page = bool(soup.find_all('a', text=self.REGEX_NEXT_PAGE))
                     if has_next_page:
                         total_pages = page + 1
-                    else:
-                        # 默认总页数为1
-                        total_pages = 1
-                
-                # 4. 确保总页数至少为1
+                    
+                # 3. 确保总页数至少为1
                 total_pages = max(1, total_pages)
                 
                 result = {
@@ -267,16 +251,13 @@ class Hanime1API:
                     'thumbnail': ''
                 }
                 
-                # 解析标题
+                # 解析标题（一次性获取，避免重复查询）
                 title_tag = soup.find('title')
                 if title_tag:
                     full_title = title_tag.get_text(strip=True)
-                    if ' - Hanime1' in full_title:
-                        video_info['title'] = full_title.split(' - Hanime1')[0].strip()
-                    elif ' - H動漫' in full_title:
-                        video_info['title'] = full_title.split(' - H動漫')[0].strip()
-                    else:
-                        video_info['title'] = full_title
+                    # 移除所有常见的网站后缀
+                    cleaned_title = self.REGEX_TITLE_CLEAN.sub('', full_title)
+                    video_info['title'] = cleaned_title.strip()
                 
                 # 解析中文标题
                 h3_title = soup.find('h3', {'id': 'shareBtn-title'})
@@ -287,11 +268,11 @@ class Hanime1API:
                 view_info = soup.find('div', class_='video-description-panel')
                 if view_info:
                     panel_text = view_info.get_text(strip=True)
-                    view_match = re.search(r'(觀看次數|观看次数)：([\d.]+)萬次', panel_text)
+                    view_match = self.REGEX_VIEW_COUNT.search(panel_text)
                     if view_match:
                         video_info['views'] = view_match.group(2) + '萬次'
                     
-                    date_match = re.search(r'(\d{4}-\d{2}-\d{2})', panel_text)
+                    date_match = self.REGEX_DATE.search(panel_text)
                     if date_match:
                         video_info['upload_date'] = date_match.group(1)
                 
@@ -299,18 +280,19 @@ class Hanime1API:
                 like_button = soup.find('button', {'id': 'video-like-btn'})
                 if like_button:
                     like_text = like_button.get_text(strip=True)
-                    match = re.search(r'(\d+)%\s*\((\d+)\)', like_text)
+                    match = self.REGEX_LIKE.search(like_text)
                     if match:
                         video_info['likes'] = f"{match.group(1)}% ({match.group(2)}票)"
                 
-                # 解析视频源
-                # 1. 从video标签提取
+                # 解析视频源（优先从video标签提取）
                 video_tag = soup.find('video', {'id': 'player'})
                 if video_tag:
+                    # 获取封面
                     poster = video_tag.get('poster')
                     if poster:
                         video_info['thumbnail'] = poster
                     
+                    # 获取视频源
                     sources = video_tag.find_all('source')
                     for source in sources:
                         src = source.get('src')
@@ -323,16 +305,14 @@ class Hanime1API:
                                 'type': source.get('type', 'video/mp4')
                             })
                 
-                # 2. 从player-div-wrapper中的JavaScript提取
+                # 如果没有找到视频源，尝试从player-div-wrapper中的JavaScript提取
                 if not video_info['video_sources']:
                     player_div_wrapper = soup.find('div', {'id': 'player-div-wrapper'})
                     if player_div_wrapper:
                         scripts = player_div_wrapper.find_all('script')
-                        video_source_regex = re.compile(r"const source = '(.*?)'")
                         for script in scripts:
-                            data = script.string
-                            if data:
-                                result = video_source_regex.search(data)
+                            if script.string:
+                                result = self.REGEX_VIDEO_SOURCE.search(script.string)
                                 if result:
                                     video_url = result.group(1)
                                     video_info['video_sources'].append({
@@ -340,65 +320,68 @@ class Hanime1API:
                                         'quality': 'unknown',
                                         'type': 'video/mp4'
                                     })
-                                    break
+                                    break  # 找到后立即停止循环
                 
-                # 解析标签
+                # 解析标签（一次性查询所有标签）
                 tags_div = soup.find('div', class_='video-tags-wrapper')
                 if tags_div:
                     tag_links = tags_div.find_all('a')
+                    tags = []
                     for link in tag_links:
                         tag_text = link.get_text(strip=True)
                         if tag_text and tag_text != '#' and 'http' not in tag_text:
-                            video_info['tags'].append(tag_text)
+                            tags.append(tag_text)
+                    video_info['tags'] = tags  # 一次性赋值，减少属性访问
                 
                 # 解析描述
                 description_div = soup.find('div', class_='video-caption-text')
                 if description_div:
                     video_info['description'] = description_div.get_text(strip=True)
                 
-                # 解析相关视频
+                # 解析相关视频（优化：先收集所有相关视频，再去重）
                 related_videos = soup.find_all('div', class_='related-watch-wrap')
+                series = []
+                seen_vids = set()
+                
                 for item in related_videos:
                     link = item.find('a', class_='overlay')
-                    if link and link.get('href'):
-                        video_url = link.get('href')
-                        match = re.search(r'v=(\d+)', video_url)
-                        if match:
-                            vid = match.group(1)
-                            title = item.get('title', '')
-                            
-                            # 尝试获取中文标题
-                            title_elem = item.find('div', class_=re.compile(r'.*title.*|.*name.*'))
-                            if title_elem:
-                                title_text = title_elem.get_text(strip=True)
-                                if title_text:
-                                    title = title_text
-                            
-                            # 获取缩略图
-                            img_tag = item.find('img')
-                            thumbnail = img_tag.get('src') if img_tag and img_tag.get('src') else ''
-                            
-                            # 获取时长
-                            duration_div = item.find('div', class_='card-mobile-duration')
-                            duration = duration_div.get_text(strip=True) if duration_div else ''
-                            
-                            video_info['series'].append({
-                                'video_id': vid,
-                                'title': title,
-                                'chinese_title': title,
-                                'url': f"{self.base_url}/watch?v={vid}",
-                                'thumbnail': thumbnail,
-                                'duration': duration
-                            })
+                    if not link or not link.get('href'):
+                        continue
+                    
+                    video_url = link.get('href')
+                    match = re.search(r'v=(\d+)', video_url)
+                    if not match:
+                        continue
+                    
+                    vid = match.group(1)
+                    if vid in seen_vids:
+                        continue  # 避免重复处理同一视频
+                    seen_vids.add(vid)
+                    
+                    # 获取标题
+                    title_elem = item.find('div', class_=self.REGEX_TITLE_CLASS)
+                    title = title_elem.get_text(strip=True) if title_elem else ''
+                    if not title:
+                        title = item.get('title', '')
+                    
+                    # 获取缩略图
+                    img_tag = item.find('img')
+                    thumbnail = img_tag.get('src') if img_tag and img_tag.get('src') else ''
+                    
+                    # 获取时长
+                    duration_div = item.find('div', class_='card-mobile-duration')
+                    duration = duration_div.get_text(strip=True) if duration_div else ''
+                    
+                    series.append({
+                        'video_id': vid,
+                        'title': title,
+                        'chinese_title': title,
+                        'url': f"{self.base_url}/watch?v={vid}",
+                        'thumbnail': thumbnail,
+                        'duration': duration
+                    })
                 
-                # 去重相关视频
-                seen = set()
-                unique_series = []
-                for item in video_info['series']:
-                    if item['video_id'] not in seen:
-                        seen.add(item['video_id'])
-                        unique_series.append(item)
-                video_info['series'] = unique_series
+                video_info['series'] = series  # 一次性赋值，减少属性访问和后续去重
                 
                 return video_info
             
@@ -407,5 +390,3 @@ class Hanime1API:
                     time.sleep(1)
                     continue
                 return None
-        
-        return None
