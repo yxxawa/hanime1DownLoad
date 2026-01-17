@@ -541,6 +541,14 @@ class DownloadWorker(QRunnable):
             else:
                 self._download_with_singlethread(file_total_size, downloaded_size)
             
+            # 发送最终进度更新，确保进度条显示100%
+            self.signals.progress.emit({
+                'progress': 100,
+                'filename': self.filename,
+                'size': file_total_size,
+                'total_size': file_total_size
+            })
+            
             self.signals.finished.emit()
         except Exception as e:
             self.signals.error.emit(str(e))
@@ -1463,8 +1471,9 @@ class Hanime1GUI(QMainWindow):
             'progress': 0,
             'size': 0,
             'total_size': 0,
-            'source': source,
-            'priority': priority
+            'priority': priority,
+            'retry_count': 0,
+            'max_retries': 3
         }
         
         self.downloads.append(download_task)
@@ -1555,17 +1564,25 @@ class Hanime1GUI(QMainWindow):
                 else:
                     num_threads = 1
                 
+                # 保存当前任务的唯一标识符（视频ID）
+                video_id = download['video_id']
+                
                 worker = DownloadWorker(download['url'], filename, save_path=download_path, num_threads=num_threads)
                 
-                worker.signals.progress.connect(lambda progress_info, idx=index: self.on_download_progress(progress_info, idx))
-                worker.signals.finished.connect(lambda idx=index: self.on_download_finished(idx))
-                worker.signals.error.connect(lambda error, idx=index: self.on_download_error(error, idx))
+                # 为worker添加视频ID属性，用于标识
+                worker.video_id = video_id
+                
+                # 使用video_id作为唯一标识符，而不是索引
+                worker.signals.progress.connect(lambda progress_info, vid=video_id: self.on_download_progress_by_id(progress_info, vid))
+                worker.signals.finished.connect(lambda vid=video_id: self.on_download_finished_by_id(vid))
+                worker.signals.error.connect(lambda error, vid=video_id: self.on_download_error_by_id(error, vid))
                 
                 self.downloads[index]['status'] = 'downloading'
                 self.downloads[index]['filename'] = filename
+                self.downloads[index]['video_id'] = video_id
                 self.update_download_list()
                 
-                self.active_downloads[index] = worker
+                self.active_downloads[video_id] = worker
                 
                 self.threadpool.start(worker)
                 
@@ -1582,40 +1599,62 @@ class Hanime1GUI(QMainWindow):
             self.update_download_list()
             
             # 计算整体进度
-            total_downloaded = 0
-            total_size = 0
-            active_downloads = []
-            
-            # 遍历所有下载任务，计算总大小和已下载大小
-            for download in self.downloads:
-                if download['status'] == 'downloading':
-                    total_downloaded += download.get('size', 0)
-                    total_size += download.get('total_size', 1)  # 避免除以0
-                    active_downloads.append(download)
-            
-            # 显示整体进度
-            if active_downloads:
-                if total_size > 0:
-                    overall_progress = int((total_downloaded / total_size) * 100)
-                    self.download_progress.setValue(overall_progress)
+            self.calculate_and_update_overall_progress()
+    
+    def on_download_progress_by_id(self, progress_info, video_id):
+        """根据视频ID更新下载进度"""
+        # 查找对应视频ID的任务
+        for i, download in enumerate(self.downloads):
+            if download.get('video_id') == video_id:
+                # 更新任务进度
+                self.downloads[i]['progress'] = progress_info['progress']
+                self.downloads[i]['size'] = progress_info['size']
+                self.downloads[i]['total_size'] = progress_info['total_size']
                 
-                # 显示当前活跃下载的数量和总进度
-                total_size_mb = total_size / (1024 * 1024)
-                downloaded_size_mb = total_downloaded / (1024 * 1024)
-                self.download_info.setText(f"同时下载: {len(active_downloads)} 个任务 - 总进度: {downloaded_size_mb:.1f}MB / {total_size_mb:.1f}MB")
-            else:
-                # 没有活跃下载时重置进度条
-                self.download_progress.setValue(0)
-                self.download_info.setText("准备下载")
+                # 更新下载列表中的进度显示
+                self.update_download_list()
+                
+                # 计算整体进度
+                self.calculate_and_update_overall_progress()
+                break
+    
+    def calculate_and_update_overall_progress(self):
+        """计算并更新整体进度"""
+        total_downloaded = 0
+        total_size = 0
+        active_downloads = []
+        
+        # 遍历所有下载任务，计算总大小和已下载大小
+        for download in self.downloads:
+            if download['status'] == 'downloading':
+                total_downloaded += download.get('size', 0)
+                total_size += download.get('total_size', 1)  # 避免除以0
+                active_downloads.append(download)
+        
+        # 显示整体进度
+        if active_downloads:
+            if total_size > 0:
+                overall_progress = int((total_downloaded / total_size) * 100)
+                self.download_progress.setValue(overall_progress)
+            
+            # 显示当前活跃下载的数量和总进度
+            total_size_mb = total_size / (1024 * 1024)
+            downloaded_size_mb = total_downloaded / (1024 * 1024)
+            self.download_info.setText(f"同时下载: {len(active_downloads)} 个任务 - 总进度: {downloaded_size_mb:.1f}MB / {total_size_mb:.1f}MB")
+        else:
+            # 没有活跃下载时重置进度条
+            self.download_progress.setValue(0)
+            self.download_info.setText("准备下载")
     
     def on_download_finished(self, index):
         """下载完成回调"""
         if 0 <= index < len(self.downloads):
             download = self.downloads[index]
+            video_id = download.get('video_id')
             
             # 从活动下载中移除
-            if index in self.active_downloads:
-                del self.active_downloads[index]
+            if video_id in self.active_downloads:
+                del self.active_downloads[video_id]
             
             # 添加到下载历史
             history_item = {
@@ -1628,10 +1667,6 @@ class Hanime1GUI(QMainWindow):
             self.save_download_history()
             self.update_history_list()
             
-            # 更新下载进度显示
-            self.download_progress.setValue(0)
-            self.download_info.setText("准备下载")
-            
             # 显示状态栏消息
             self.statusBar().showMessage(f"视频 {download['title'][:20]}... 下载完成")
             
@@ -1642,28 +1677,52 @@ class Hanime1GUI(QMainWindow):
             self.update_download_list()
             
             # 重新计算整体进度
-            total_downloaded = 0
-            total_size = 0
-            active_downloads = []
+            self.calculate_and_update_overall_progress()
             
-            for download in self.downloads:
-                if download['status'] == 'downloading':
-                    total_downloaded += download.get('size', 0)
-                    total_size += download.get('total_size', 1)
-                    active_downloads.append(download)
+            # 检查是否还有待下载的视频，如果有，自动开始下载下一个，保持最大同时下载数
+            self.on_start_download()
             
-            # 更新进度条显示
-            if active_downloads:
-                if total_size > 0:
-                    overall_progress = int((total_downloaded / total_size) * 100)
-                    self.download_progress.setValue(overall_progress)
-                
-                total_size_mb = total_size / (1024 * 1024)
-                downloaded_size_mb = total_downloaded / (1024 * 1024)
-                self.download_info.setText(f"同时下载: {len(active_downloads)} 个任务 - 总进度: {downloaded_size_mb:.1f}MB / {total_size_mb:.1f}MB")
-            else:
-                self.download_progress.setValue(0)
-                self.download_info.setText("准备下载")
+            # 检查是否有等待重试的任务
+            self.check_and_retry_failed_downloads()
+    
+    def on_download_finished_by_id(self, video_id):
+        """根据视频ID处理下载完成"""
+        # 查找对应视频ID的任务索引
+        task_index = -1
+        for i, download in enumerate(self.downloads):
+            if download.get('video_id') == video_id:
+                task_index = i
+                break
+        
+        if task_index != -1:
+            download = self.downloads[task_index]
+            
+            # 从活动下载中移除
+            if video_id in self.active_downloads:
+                del self.active_downloads[video_id]
+            
+            # 添加到下载历史
+            history_item = {
+                'video_id': download['video_id'],
+                'title': download['title'],
+                'filename': download.get('filename', f"video_{download['video_id']}.mp4"),
+                'download_date': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            self.download_history.append(history_item)
+            self.save_download_history()
+            self.update_history_list()
+            
+            # 显示状态栏消息
+            self.statusBar().showMessage(f"视频 {download['title'][:20]}... 下载完成")
+            
+            # 从下载队列中移除已完成的视频
+            del self.downloads[task_index]
+            
+            # 更新下载列表显示
+            self.update_download_list()
+            
+            # 重新计算整体进度
+            self.calculate_and_update_overall_progress()
             
             # 检查是否还有待下载的视频，如果有，自动开始下载下一个，保持最大同时下载数
             self.on_start_download()
@@ -1675,44 +1734,58 @@ class Hanime1GUI(QMainWindow):
             self.downloads[index]['error'] = str(error)
             
             # 从活动下载中移除
-            if index in self.active_downloads:
-                del self.active_downloads[index]
+            video_id = self.downloads[index].get('video_id')
+            if video_id in self.active_downloads:
+                del self.active_downloads[video_id]
             
             # 更新下载列表显示
             self.update_download_list()
             
             # 重新计算整体进度
-            total_downloaded = 0
-            total_size = 0
-            active_downloads = []
-            
-            for download in self.downloads:
-                if download['status'] == 'downloading':
-                    total_downloaded += download.get('size', 0)
-                    total_size += download.get('total_size', 1)
-                    active_downloads.append(download)
-            
-            # 更新进度条显示
-            if active_downloads:
-                if total_size > 0:
-                    overall_progress = int((total_downloaded / total_size) * 100)
-                    self.download_progress.setValue(overall_progress)
-                
-                total_size_mb = total_size / (1024 * 1024)
-                downloaded_size_mb = total_downloaded / (1024 * 1024)
-                self.download_info.setText(f"同时下载: {len(active_downloads)} 个任务 - 总进度: {downloaded_size_mb:.1f}MB / {total_size_mb:.1f}MB")
-            else:
-                self.download_progress.setValue(0)
-                self.download_info.setText("准备下载")
+            self.calculate_and_update_overall_progress()
             
             self.statusBar().showMessage(f"视频下载出错: {error}")
     
+    def on_download_error_by_id(self, error, video_id):
+        """根据视频ID处理下载错误"""
+        # 查找对应视频ID的任务
+        for i, download in enumerate(self.downloads):
+            if download.get('video_id') == video_id:
+                # 更新重试计数
+                retry_count = download.get('retry_count', 0) + 1
+                self.downloads[i]['retry_count'] = retry_count
+                self.downloads[i]['error'] = str(error)
+                
+                # 从活动下载中移除
+                if video_id in self.active_downloads:
+                    del self.active_downloads[video_id]
+                
+                # 更新下载列表显示
+                self.update_download_list()
+                
+                # 重新计算整体进度
+                self.calculate_and_update_overall_progress()
+                
+                if retry_count < download.get('max_retries', 3):
+                    # 还有重试机会，将状态改为pending，等待重试
+                    self.downloads[i]['status'] = 'pending'
+                    self.statusBar().showMessage(f"视频 {download['title'][:20]}... 下载出错，将重试 ({retry_count}/{download.get('max_retries', 3)})")
+                else:
+                    # 重试次数已达上限
+                    self.downloads[i]['status'] = 'error'
+                    self.statusBar().showMessage(f"视频 {download['title'][:20]}... 下载出错，已达到最大重试次数")
+                break
+    
     def on_pause_download(self):
         """暂停所有当前下载"""
-        for index, worker in self.active_downloads.items():
+        for video_id, worker in self.active_downloads.items():
             # 调用worker的pause方法，实现真正的暂停
             worker.pause()
-            self.downloads[index]['status'] = 'paused'
+            # 查找对应视频ID的任务并更新状态
+            for i, download in enumerate(self.downloads):
+                if download.get('video_id') == video_id:
+                    self.downloads[i]['status'] = 'paused'
+                    break
         
         # 批量更新下载列表和进度显示
         self.update_download_list()
@@ -1724,10 +1797,14 @@ class Hanime1GUI(QMainWindow):
     
     def on_resume_download(self):
         """恢复所有当前下载"""
-        for index, worker in self.active_downloads.items():
+        for video_id, worker in self.active_downloads.items():
             # 调用worker的resume方法，恢复下载
             worker.resume()
-            self.downloads[index]['status'] = 'downloading'
+            # 查找对应视频ID的任务并更新状态
+            for i, download in enumerate(self.downloads):
+                if download.get('video_id') == video_id:
+                    self.downloads[i]['status'] = 'downloading'
+                    break
         
         # 批量更新下载列表
         self.update_download_list()
@@ -1739,27 +1816,32 @@ class Hanime1GUI(QMainWindow):
     
     def on_cancel_download(self):
         """取消所有当前下载"""
-        # 保存需要取消的任务索引，避免在遍历字典时修改字典
-        cancelled_tasks = list(self.active_downloads.keys())
-        cancelled_count = len(cancelled_tasks)
+        # 保存需要取消的视频ID，避免在遍历字典时修改字典
+        cancelled_video_ids = list(self.active_downloads.keys())
+        cancelled_count = len(cancelled_video_ids)
         
         if cancelled_count > 0:
-            for index in cancelled_tasks:
-                if index < len(self.downloads):
-                    worker = self.active_downloads[index]
-                    worker.cancel()
-                    self.downloads[index]['status'] = 'cancelled'
-                    
-                    # 删除本地文件
-                    file_path = os.path.join(self.settings['download_path'], self.downloads[index]['filename'])
-                    if os.path.exists(file_path):
-                        try:
-                            os.remove(file_path)
-                        except Exception as e:
-                            pass
-                    
-                    # 从活跃下载中移除
-                    del self.active_downloads[index]
+            for video_id in cancelled_video_ids:
+                worker = self.active_downloads[video_id]
+                worker.cancel()
+                
+                # 查找对应视频ID的任务
+                for i, download in enumerate(self.downloads):
+                    if download.get('video_id') == video_id:
+                        # 更新任务状态
+                        self.downloads[i]['status'] = 'cancelled'
+                        
+                        # 删除本地文件
+                        file_path = os.path.join(self.settings['download_path'], download['filename'])
+                        if os.path.exists(file_path):
+                            try:
+                                os.remove(file_path)
+                            except Exception as e:
+                                pass
+                        break
+                
+                # 从活跃下载中移除
+                del self.active_downloads[video_id]
             
             # 批量更新下载列表
             self.update_download_list()
@@ -1770,15 +1852,60 @@ class Hanime1GUI(QMainWindow):
             
             self.statusBar().showMessage(f"已取消 {cancelled_count} 个下载任务并删除临时文件")
     
+    def check_and_retry_failed_downloads(self):
+        """检查并重试失败的下载任务"""
+        # 获取最大同时下载数设置
+        max_simultaneous = self.settings.get('max_simultaneous_downloads', 2)
+        
+        # 计算当前活跃下载数
+        current_active = len(self.active_downloads)
+        
+        # 计算还能启动多少个下载
+        available_slots = max_simultaneous - current_active
+        if available_slots <= 0:
+            return
+        
+        # 查找等待重试的任务
+        retry_tasks = []
+        for i, download in enumerate(self.downloads):
+            if download['status'] == 'pending' and download.get('retry_count', 0) > 0:
+                retry_tasks.append(i)
+        
+        # 按重试次数排序，优先重试重试次数少的任务
+        retry_tasks.sort(key=lambda i: self.downloads[i]['retry_count'])
+        
+        # 逐个重试
+        for i in retry_tasks[:available_slots]:
+            download = self.downloads[i]
+            video_id = download['video_id']
+            
+            # 获取新的视频信息和下载链接
+            worker = GetVideoInfoWorker(self.api, video_id)
+            worker.signals.result.connect(lambda video_info, idx=i: self.on_video_info_for_retry(video_info, idx))
+            self.threadpool.start(worker)
+    
+    def on_video_info_for_retry(self, video_info, index):
+        """获取视频信息用于重试下载"""
+        if video_info and video_info['video_sources']:
+            # 选择质量最高的源进行下载
+            source = video_info['video_sources'][0]
+            
+            # 更新下载任务的URL
+            self.downloads[index]['url'] = source['url']
+            self.downloads[index]['status'] = 'downloading'
+            
+            # 启动下载
+            self.start_download(index)
+    
     def on_clear_download_list(self):
         """清空下载列表（仅清空未下载的任务，保留正在下载的任务）"""
         # 保留正在下载的任务，只清空未下载的任务
         remaining_downloads = []
-        active_indices = list(self.active_downloads.keys())
+        active_video_ids = list(self.active_downloads.keys())
         
         for i, download in enumerate(self.downloads):
             # 如果是活动下载，保留
-            if i in active_indices:
+            if download.get('video_id') in active_video_ids:
                 remaining_downloads.append(download)
         
         # 更新下载列表，重新分配优先级
