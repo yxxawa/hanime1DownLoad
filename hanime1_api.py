@@ -21,18 +21,20 @@ class Hanime1API:
     
     def __init__(self):
         self.base_url = "https://hanime1.me"
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
+        # 内置默认请求头
+        self.default_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
             'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
             'Accept-Encoding': 'gzip, deflate, br, zstd',
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
+            'Upgrade-Insecure-Requests': '1'
         }
+        
+        # 初始化session
         self.session = requests.Session()
         
         # 优化session配置，减少连接建立时间
-        self.session.headers.update(self.headers)
         self.session.trust_env = True  # 允许使用系统环境配置，包括DNS解析
         self.session.verify = True
         
@@ -45,24 +47,30 @@ class Hanime1API:
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
         
-        # 启用HTTP/2支持（如果服务器支持）
-        try:
-            from urllib3.contrib import pyopenssl
-            from urllib3.contrib import _securetransport
-            from urllib3.util import ssl_ as ssl_utils
-            self.session.headers.update({'Connection': 'Upgrade, HTTP2-Settings'})
-        except ImportError:
-            pass
-        
         # 优化超时设置
         self.session.timeout = (5, 15)  # 连接超时5秒，读取超时15秒
         
-        # 加载保存的session
+        # 加载保存的session和请求头
         self.load_session()
+        
+        # 如果settings中没有请求头，使用默认请求头
+        if not hasattr(self, 'headers') or not self.headers:
+            self.headers = self.default_headers.copy()
+        
+        # 禁用HTTP/2支持，因为有些网站对HTTP/2的请求处理不同，可能会导致Cloudflare更容易识别为机器人
+        # 移除任何可能与HTTP/2相关的头信息
+        self.headers.pop('Connection', None)
+        self.headers['Connection'] = 'keep-alive'
+        
+        # 更新session的headers
+        self.session.headers.update(self.headers)
+        
+        # 保存当前请求头到settings
+        self.save_session()
     
     def save_session(self):
         """
-        保存session信息到settings.json文件
+        保存session信息和请求头到settings.json文件
         """
         try:
             # 读取现有的settings
@@ -71,41 +79,105 @@ class Hanime1API:
                 with open('settings.json', 'r', encoding='utf-8') as f:
                     settings = json.load(f)
             
-            # 更新session信息
+            # 更新session信息，包括完整的cookie属性
+            cookie_dict = {}
+            for cookie in self.session.cookies:
+                cookie_dict[cookie.name] = {
+                    'value': cookie.value,
+                    'domain': cookie.domain,
+                    'path': cookie.path,
+                    'expires': cookie.expires,
+                    'secure': cookie.secure,
+                    'httponly': getattr(cookie, 'httponly', False)  # 使用getattr避免AttributeError
+                }
+            
+            # 保存请求头到settings
+            settings['headers'] = self.headers
+            
+            # 保存session信息
             settings['session'] = {
-                'cookies': self.session.cookies.get_dict(),
-                'headers': dict(self.session.headers),
+                'cookies': cookie_dict,
                 'timestamp': time.time()
             }
             
             # 保存到settings.json
             with open('settings.json', 'w', encoding='utf-8') as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
-            print("Session保存成功到settings.json")
+            print("Session和请求头保存成功到settings.json")
         except Exception as e:
             print(f"Session保存失败: {e}")
     
     def load_session(self):
         """
-        从settings.json加载session信息
+        从settings.json加载session信息和请求头
         """
         try:
             if os.path.exists('settings.json'):
                 with open('settings.json', 'r', encoding='utf-8') as f:
                     settings = json.load(f)
-                
+            else:
+                print("Settings.json不存在，无法加载session")
+                return
+            
+            # 加载请求头
+            self.headers = settings.get('headers', {})
+            if self.headers:
+                print(f"请求头加载成功，共{len(self.headers)}个字段")
+            else:
+                print("Settings中没有请求头，将使用默认请求头")
+            
             session_data = settings.get('session', {})
             # 恢复cookies
-            for name, value in session_data.get('cookies', {}).items():
-                # 为cf_clearance cookie设置正确的domain
-                if name == 'cf_clearance':
-                    self.session.cookies.set(name, value, domain='.hanime1.me', path='/')
-                else:
-                    self.session.cookies.set(name, value)
-            
-            print("Session加载成功")
+            cookie_dict = session_data.get('cookies', {})
+            if cookie_dict:
+                loaded_count = 0
+                
+                # 处理两种cookie格式：旧格式（直接是name:value字典）和新格式（包含完整属性）
+                for name, cookie_info in cookie_dict.items():
+                    try:
+                        if isinstance(cookie_info, dict):
+                            # 新格式：包含完整属性
+                            self.session.cookies.set(
+                                name,
+                                cookie_info['value'],
+                                domain=cookie_info.get('domain', '.hanime1.me'),
+                                path=cookie_info.get('path', '/'),
+                                expires=cookie_info.get('expires'),
+                                secure=cookie_info.get('secure', True),
+                                httponly=cookie_info.get('httponly', False)
+                            )
+                        else:
+                            # 旧格式：直接是值
+                            self.session.cookies.set(name, cookie_info, domain='.hanime1.me', path='/')
+                        
+                        loaded_count += 1
+                    except Exception as e:
+                        print(f"加载cookie {name} 失败: {e}")
+                        continue
+                
+                print(f"Session加载成功，共加载{loaded_count}个cookies")
+            else:
+                print("Session中没有cookies信息")
         except Exception as e:
             print(f"Session加载失败: {e}")
+            # 如果加载失败，尝试清理旧的settings.json文件
+            try:
+                os.rename('settings.json', 'settings.json.backup')
+                print("已将旧的settings.json重命名为settings.json.backup")
+            except Exception as rename_e:
+                print(f"重命名旧settings.json失败: {rename_e}")
+    
+    def set_cf_clearance(self, cf_clearance_value):
+        """
+        手动设置cf_clearance cookie，这是Cloudflare反爬虫保护的关键
+        
+        参数:
+            cf_clearance_value: cf_clearance cookie的值
+        """
+        self.session.cookies.set('cf_clearance', cf_clearance_value, domain='.hanime1.me', path='/', secure=True, httponly=True)
+        print(f"已设置cf_clearance cookie")
+        # 保存session，以便下次使用
+        self.save_session()
     
 
     
@@ -158,12 +230,21 @@ class Hanime1API:
             
             try:
                 url = f"{self.base_url}/search"
+                print(f"搜索请求URL: {url}, 参数: {params}")
                 response = self.session.get(url, params=params, timeout=10)
                 
+                print(f"搜索请求状态码: {response.status_code}")
                 if response.status_code != 200:
+                    print(f"搜索请求失败，状态码: {response.status_code}")
                     return None
             
                 html_content = response.text
+                
+                # 检测Cloudflare验证页面
+                if "正在验证您是否是真人" in html_content or "hanime1.me正在验证" in html_content or "请稍候…" in html_content:
+                    print("检测到Cloudflare验证页面，搜索失败")
+                    return None
+                
                 soup = BeautifulSoup(html_content, 'html.parser')
                 
                 # 模仿Han1meViewer-main的搜索结果解析，适配新的页面结构
@@ -172,6 +253,7 @@ class Hanime1API:
                 
                 # 优先查找content-padding-new容器
                 video_containers = soup.select('div.content-padding-new div.video-item-container, div.row div.video-item-container')
+                print(f"找到视频容器数量: {len(video_containers)}")
                 
                 for container in video_containers:
                     # 查找horizontal-card
@@ -219,6 +301,7 @@ class Hanime1API:
                 
                 # 将去重后的视频添加到结果列表
                 videos = list(video_dict.values())
+                print(f"去重后找到视频数量: {len(videos)}")
                 
                 # 解析总页数 - 简化逻辑，减少DOM查询
                 total_pages = 1
@@ -249,11 +332,13 @@ class Hanime1API:
                     
                     if page_numbers:
                         total_pages = max(page_numbers)
+                        print(f"从分页中提取到总页数: {total_pages}")
                 else:
                     # 2. 检查是否有下一页按钮
                     has_next_page = bool(soup.find_all('a', text=self.REGEX_NEXT_PAGE))
                     if has_next_page:
                         total_pages = page + 1
+                        print(f"检测到下一页按钮，总页数设为: {total_pages}")
                     
                 # 3. 确保总页数至少为1
                 total_pages = max(1, total_pages)
@@ -267,9 +352,13 @@ class Hanime1API:
                     'videos': videos,
                     'has_results': len(videos) > 0
                 }
+                
+                print(f"搜索完成，返回视频数量: {len(videos)}, 总页数: {total_pages}")
             
             except Exception as e:
                 print(f"搜索错误: {e}")
+                import traceback
+                traceback.print_exc()
                 return None
             
             return result
