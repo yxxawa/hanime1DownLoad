@@ -5,13 +5,15 @@ import re
 import threading
 import time
 import concurrent.futures
+import webbrowser
+import datetime
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
     QLabel, QPushButton, QLineEdit, QSpinBox, QProgressBar, QTextEdit,
     QGroupBox, QFormLayout, QTabWidget, QMenu, QAction, QDialog,
     QSizePolicy, QRadioButton, QFileDialog, QComboBox, QCheckBox, QMessageBox, QInputDialog
 )
-from PyQt5.QtCore import Qt, QRunnable, QThreadPool, pyqtSignal, pyqtSlot, QObject, QTimer
+from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRunnable, QThreadPool, pyqtSlot
 from PyQt5.QtGui import QPixmap
 import requests
 
@@ -478,6 +480,9 @@ class SettingsDialog(QDialog):
         return self.settings
 
 
+
+
+
 class DownloadWorker(QRunnable):
     """下载工作线程，支持多线程和断点续传"""
     
@@ -531,8 +536,8 @@ class DownloadWorker(QRunnable):
             downloaded_size = 0
             
             # 根据服务器支持情况选择下载方式
-            if supports_range_requests:
-                self._download_with_multithreading(file_total_size, downloaded_size)
+            if supports_range_requests and file_total_size > 0:
+                self._download_with_multithreading(file_total_size)
             else:
                 self._download_with_singlethread(file_total_size, downloaded_size)
             
@@ -562,12 +567,11 @@ class DownloadWorker(QRunnable):
         
         return file_total_size, supports_range_requests
     
-    def _download_with_multithreading(self, file_total_size, downloaded_size):
+    def _download_with_multithreading(self, file_total_size):
         """多线程下载
         
         Args:
             file_total_size: 文件总大小
-            downloaded_size: 已下载大小
         """
         # 根据文件大小动态调整线程数，提高下载效率
         # 小文件使用较少线程，大文件使用更多线程
@@ -773,6 +777,7 @@ class Hanime1GUI(QMainWindow):
         super().__init__()
         self.api = Hanime1API()
         self.threadpool = QThreadPool()
+        self.threadpool.setMaxThreadCount(32)  # 设置最大线程数为32，避免过多线程切换
         
         # 初始化设置
         self.settings_file = os.path.join(os.getcwd(), 'settings.json')
@@ -780,6 +785,7 @@ class Hanime1GUI(QMainWindow):
         self.default_settings = {
             'download_mode': 'multi_thread',
             'num_threads': 4,
+            'max_simultaneous_downloads': 2,
             'download_quality': '最高',
             'download_path': os.path.join(os.getcwd(), 'hanimeDownload'),
             'file_naming_rule': '{title}',
@@ -979,6 +985,11 @@ class Hanime1GUI(QMainWindow):
         import_favorites_button = QPushButton("导入")
         import_favorites_button.clicked.connect(self.on_import_favorites)
         favorites_top_layout.addWidget(import_favorites_button)
+        
+        # 收藏分享按钮
+        share_button = QPushButton("收藏分享")
+        share_button.clicked.connect(self.on_share_website)
+        favorites_top_layout.addWidget(share_button)
         
         favorites_layout.addLayout(favorites_top_layout)
         
@@ -1307,7 +1318,6 @@ class Hanime1GUI(QMainWindow):
     
     def on_search_finished(self):
         """搜索结束回调"""
-        pass
     
     def on_video_selected(self, item):
         """视频选择回调"""
@@ -1401,7 +1411,6 @@ class Hanime1GUI(QMainWindow):
     
     def on_video_info_finished(self):
         """视频信息获取结束回调"""
-        pass
     
     def update_source_links(self, video_sources):
         """更新视频源链接显示"""
@@ -1442,11 +1451,6 @@ class Hanime1GUI(QMainWindow):
         
         # 根据设置的命名规则生成文件名
         naming_rule = self.settings.get('file_naming_rule', '{title}')
-        filename_pattern = naming_rule.format(
-            title=safe_title,
-            video_id=video_info['video_id']
-        )
-        filename = f"{filename_pattern}.mp4"
         
         # 新添加的任务优先级为当前队列长度（最低优先级）
         priority = len(self.downloads)
@@ -1537,8 +1541,12 @@ class Hanime1GUI(QMainWindow):
                 full_path = os.path.join(download_path, filename)
                 if os.path.exists(full_path) and not self.settings.get('overwrite_existing', False):
                     self.statusBar().showMessage(f"文件 {filename} 已存在，跳过下载")
-                    download['status'] = 'error'
+                    # 从下载队列中移除该任务
+                    del self.downloads[index]
+                    # 更新下载列表
                     self.update_download_list()
+                    # 继续下载下一个任务
+                    self.on_start_download()
                     return
                 
                 # 选择线程数
@@ -1610,7 +1618,6 @@ class Hanime1GUI(QMainWindow):
                 del self.active_downloads[index]
             
             # 添加到下载历史
-            import datetime
             history_item = {
                 'video_id': download['video_id'],
                 'title': download['title'],
@@ -1834,7 +1841,6 @@ class Hanime1GUI(QMainWindow):
         """从菜单下载"""
         for item in items:
             text = item.text()
-            import re
             match = re.search(r'\[(\d+)]\s*(.+)', text)
             if match:
                 video_id = match.group(1)
@@ -2023,8 +2029,6 @@ class Hanime1GUI(QMainWindow):
     
     def on_export_favorites(self):
         """导出当前选中的收藏夹"""
-        from PyQt5.QtWidgets import QFileDialog, QMessageBox
-        
         # 获取当前选中的收藏夹
         current_folder = self.folder_combobox.currentText()
         
@@ -2050,10 +2054,10 @@ class Hanime1GUI(QMainWindow):
             except Exception as e:
                 self.statusBar().showMessage(f"导出收藏夹失败: {str(e)}")
     
+
+    
     def on_import_favorites(self):
         """导入收藏夹"""
-        from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog
-        
         file_path, _ = QFileDialog.getOpenFileName(
             self, "导入收藏夹", "", "JSON Files (*.json)"
         )
@@ -2142,10 +2146,13 @@ class Hanime1GUI(QMainWindow):
             except Exception as e:
                 self.statusBar().showMessage(f"导入收藏夹失败: {str(e)}")
     
+    def on_share_website(self):
+        """打开hanime1.yxxawa.top网站"""
+        webbrowser.open("https://hanime1.yxxawa.top")
+        self.statusBar().showMessage("正在打开hanime1.yxxawa.top网站")
+    
     def add_to_favorites(self, video_info):
         """添加到收藏夹，询问用户要添加到哪个收藏夹"""
-        from PyQt5.QtWidgets import QInputDialog, QMessageBox
-        
         # 如果没有收藏夹，创建默认收藏夹
         if not self.favorites:
             self.favorites['默认收藏夹'] = []
@@ -2223,8 +2230,6 @@ class Hanime1GUI(QMainWindow):
     
     def on_add_to_favorites_from_menu(self, items):
         """从菜单添加到收藏夹，询问用户要添加到哪个收藏夹"""
-        from PyQt5.QtWidgets import QInputDialog, QMessageBox
-        
         # 如果没有选择任何视频，直接返回
         if not items:
             return
@@ -2253,7 +2258,6 @@ class Hanime1GUI(QMainWindow):
         
         for item in items:
             text = item.text()
-            import re
             match = re.search(r'\[(\d+)]\s*(.+)', text)
             if match:
                 video_id = match.group(1)
@@ -2296,7 +2300,6 @@ class Hanime1GUI(QMainWindow):
         video_ids_to_remove = []
         for item in items:
             text = item.text()
-            import re
             match = re.search(r'\[(\d+)]', text)
             if match:
                 video_ids_to_remove.append(match.group(1))
@@ -2318,7 +2321,6 @@ class Hanime1GUI(QMainWindow):
     def on_favorite_selected(self, item):
         """收藏夹视频选择回调"""
         text = item.text()
-        import re
         match = re.search(r'\[(\d+)]', text)
         if match:
             video_id = match.group(1)
@@ -2328,7 +2330,6 @@ class Hanime1GUI(QMainWindow):
         """查看收藏夹视频信息"""
         for item in items:
             text = item.text()
-            import re
             match = re.search(r'\[(\d+)]', text)
             if match:
                 video_id = match.group(1)
@@ -2339,7 +2340,6 @@ class Hanime1GUI(QMainWindow):
         """下载收藏夹视频"""
         for item in items:
             text = item.text()
-            import re
             match = re.search(r'\[(\d+)]', text)
             if match:
                 video_id = match.group(1)
@@ -2575,11 +2575,6 @@ class Hanime1GUI(QMainWindow):
         if not self.current_cover_url:
             return
         
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QMessageBox
-        from PyQt5.QtGui import QPixmap
-        from PyQt5.QtCore import Qt
-        import requests
-        
         # 创建弹窗
         cover_dialog = QDialog(self)
         cover_dialog.setWindowTitle("封面预览")
@@ -2637,7 +2632,6 @@ class Hanime1GUI(QMainWindow):
     def on_related_video_clicked(self, item):
         """点击相关视频"""
         text = item.text()
-        import re
         match = re.search(r'\[(\d+)]', text)
         if match:
             video_id = match.group(1)
