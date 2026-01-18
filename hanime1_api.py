@@ -34,10 +34,6 @@ class Hanime1API:
         # 初始化session
         self.session = requests.Session()
         
-        # 优化session配置，减少连接建立时间
-        self.session.trust_env = True  # 允许使用系统环境配置，包括DNS解析
-        self.session.verify = True
-        
         # 启用连接池
         adapter = requests.adapters.HTTPAdapter(
             pool_connections=10,  # 连接池中的最大连接数
@@ -47,7 +43,7 @@ class Hanime1API:
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
         
-        # 优化超时设置
+        # 设置超时
         self.session.timeout = (5, 15)  # 连接超时5秒，读取超时15秒
         
         # 加载保存的session和请求头
@@ -57,29 +53,19 @@ class Hanime1API:
         if not hasattr(self, 'headers') or not self.headers:
             self.headers = self.default_headers.copy()
         
-        # 禁用HTTP/2支持，因为有些网站对HTTP/2的请求处理不同，可能会导致Cloudflare更容易识别为机器人
-        # 移除任何可能与HTTP/2相关的头信息
-        self.headers.pop('Connection', None)
-        self.headers['Connection'] = 'keep-alive'
-        
         # 更新session的headers
         self.session.headers.update(self.headers)
-        
-        # 保存当前请求头到settings
-        self.save_session()
     
     def save_session(self):
         """
         保存session信息和请求头到settings.json文件
         """
         try:
-            # 读取现有的settings
             settings = {}
             if os.path.exists('settings.json'):
                 with open('settings.json', 'r', encoding='utf-8') as f:
                     settings = json.load(f)
             
-            # 更新session信息，包括完整的cookie属性
             cookie_dict = {}
             for cookie in self.session.cookies:
                 cookie_dict[cookie.name] = {
@@ -88,50 +74,38 @@ class Hanime1API:
                     'path': cookie.path,
                     'expires': cookie.expires,
                     'secure': cookie.secure,
-                    'httponly': getattr(cookie, 'httponly', False)  # 使用getattr避免AttributeError
+                    'httponly': getattr(cookie, 'httponly', False)
                 }
             
-            # 保存请求头到settings
             settings['headers'] = self.headers
-            
-            # 保存session信息
             settings['session'] = {
                 'cookies': cookie_dict,
                 'timestamp': time.time()
             }
             
-            # 保存到settings.json
             with open('settings.json', 'w', encoding='utf-8') as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
-            print("Session和请求头保存成功到settings.json")
         except Exception as e:
-            print(f"Session保存失败: {e}")
+            pass
     
     def load_session(self):
         """
         从settings.json加载session信息和请求头
         """
         try:
-            if os.path.exists('settings.json'):
-                with open('settings.json', 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-            else:
-                print("Settings.json不存在，无法加载session")
+            if not os.path.exists('settings.json'):
                 return
+            
+            with open('settings.json', 'r', encoding='utf-8') as f:
+                settings = json.load(f)
             
             # 加载请求头
             self.headers = settings.get('headers', {})
-            if self.headers:
-                print(f"请求头加载成功，共{len(self.headers)}个字段")
-            else:
-                print("Settings中没有请求头，将使用默认请求头")
             
             session_data = settings.get('session', {})
-            # 恢复cookies
             cookie_dict = session_data.get('cookies', {})
+            
             if cookie_dict:
-                loaded_count = 0
-                
                 # 处理两种cookie格式：旧格式（直接是name:value字典）和新格式（包含完整属性）
                 for name, cookie_info in cookie_dict.items():
                     try:
@@ -149,23 +123,14 @@ class Hanime1API:
                         else:
                             # 旧格式：直接是值
                             self.session.cookies.set(name, cookie_info, domain='.hanime1.me', path='/')
-                        
-                        loaded_count += 1
                     except Exception as e:
-                        print(f"加载cookie {name} 失败: {e}")
                         continue
-                
-                print(f"Session加载成功，共加载{loaded_count}个cookies")
-            else:
-                print("Session中没有cookies信息")
         except Exception as e:
-            print(f"Session加载失败: {e}")
             # 如果加载失败，尝试清理旧的settings.json文件
             try:
                 os.rename('settings.json', 'settings.json.backup')
-                print("已将旧的settings.json重命名为settings.json.backup")
-            except Exception as rename_e:
-                print(f"重命名旧settings.json失败: {rename_e}")
+            except:
+                pass
     
     def set_cf_clearance(self, cf_clearance_value):
         """
@@ -174,10 +139,15 @@ class Hanime1API:
         参数:
             cf_clearance_value: cf_clearance cookie的值
         """
-        self.session.cookies.set('cf_clearance', cf_clearance_value, domain='.hanime1.me', path='/', secure=True, httponly=True)
-        print(f"已设置cf_clearance cookie")
-        # 保存session，以便下次使用
-        self.save_session()
+        if cf_clearance_value:
+            self.session.cookies.set('cf_clearance', cf_clearance_value, domain='.hanime1.me', path='/', secure=True, httponly=True)
+            # 保存session，以便下次使用
+            self.save_session()
+        else:
+            # 如果值为空，移除cf_clearance cookie
+            self.session.cookies.clear()
+            # 保存session，以便下次使用
+            self.save_session()
     
 
     
@@ -230,30 +200,25 @@ class Hanime1API:
             
             try:
                 url = f"{self.base_url}/search"
-                print(f"搜索请求URL: {url}, 参数: {params}")
                 response = self.session.get(url, params=params, timeout=10)
                 
-                print(f"搜索请求状态码: {response.status_code}")
                 if response.status_code != 200:
-                    print(f"搜索请求失败，状态码: {response.status_code}")
                     return None
             
                 html_content = response.text
                 
                 # 检测Cloudflare验证页面
                 if "正在验证您是否是真人" in html_content or "hanime1.me正在验证" in html_content or "请稍候…" in html_content:
-                    print("检测到Cloudflare验证页面，搜索失败")
                     return None
                 
                 soup = BeautifulSoup(html_content, 'html.parser')
                 
-                # 模仿Han1meViewer-main的搜索结果解析，适配新的页面结构
+                # 搜索结果解析
                 videos = []
                 video_dict = {}
                 
                 # 优先查找content-padding-new容器
                 video_containers = soup.select('div.content-padding-new div.video-item-container, div.row div.video-item-container')
-                print(f"找到视频容器数量: {len(video_containers)}")
                 
                 for container in video_containers:
                     # 查找horizontal-card
@@ -279,13 +244,13 @@ class Hanime1API:
                     if video_id in video_dict:
                         continue
                     
-                    # 提取标题 - 查找title类
+                    # 提取标题
                     title_element = card.find('div', class_='title')
                     if not title_element:
                         continue
                     title = title_element.text.strip()
                     
-                    # 提取封面URL - 查找img标签
+                    # 提取封面URL
                     img = card.find('img')
                     if not img or not img.get('src'):
                         continue
@@ -301,17 +266,16 @@ class Hanime1API:
                 
                 # 将去重后的视频添加到结果列表
                 videos = list(video_dict.values())
-                print(f"去重后找到视频数量: {len(videos)}")
                 
-                # 解析总页数 - 简化逻辑，减少DOM查询
+                # 解析总页数
                 total_pages = 1
+                page_numbers = []  # 初始化page_numbers列表，避免UnboundLocalError
                 
                 # 1. 查找带有pagination类的ul元素（优先级最高）
                 pagination = soup.find('ul', class_='pagination')
                 if pagination:
                     # 从分页ul中提取页码
                     page_items = pagination.find_all('li', class_='page-item')
-                    page_numbers = []
                     
                     for item in page_items:
                         link = item.find('a', class_='page-link')
@@ -329,19 +293,97 @@ class Hanime1API:
                         page_match = self.REGEX_PAGE_NUM.search(href)
                         if page_match:
                             page_numbers.append(int(page_match.group(1)))
+                
+                # 2. 无论是否找到pagination，都查找所有链接，提取更多页码信息
+                all_links = soup.find_all('a', href=True)
+                for link in all_links:
+                    href = link.get('href')
+                    text = link.get_text().strip()
                     
-                    if page_numbers:
-                        total_pages = max(page_numbers)
-                        print(f"从分页中提取到总页数: {total_pages}")
+                    # 检查是否是页码链接
+                    page_match = self.REGEX_PAGE_NUM.search(href)
+                    if page_match:
+                        page_numbers.append(int(page_match.group(1)))
+                    elif text.isdigit() and len(text) <= 3:
+                        # 检查文本是否是数字页码
+                        page_numbers.append(int(text))
+                
+                # 去重页码列表，避免重复值影响结果
+                unique_page_numbers = list(set(page_numbers))
+                
+                # 3. 检查是否有下一页按钮，使用多种方式检测，并增加最后一页判断
+                has_next_page = False
+                
+                # 方式1：使用正则表达式匹配文本，但排除可能是上一页的按钮
+                next_links_text = soup.find_all('a', text=self.REGEX_NEXT_PAGE)
+                for link in next_links_text:
+                    href = link.get('href', '')
+                    text = link.get_text().strip()
+                    
+                    # 排除"上一页"按钮
+                    if '上一页' in text or 'Previous' in text.lower() or 'prev' in text.lower():
+                        continue
+                    
+                    # 检查是否是真正的下一页按钮
+                    if 'page' in href or any(keyword in text.lower() for keyword in ['next', '下一', '>']):
+                        has_next_page = True
+                        break
+                
+                # 方式2：查找包含>、»等符号的链接，但排除可能是上一页的按钮
+                if not has_next_page:
+                    arrow_links = soup.find_all('a', text=re.compile(r'[>»]'))
+                    for link in arrow_links:
+                        href = link.get('href', '')
+                        text = link.get_text().strip()
+                        
+                        # 排除"上一页"按钮
+                        if '<' in text or '‹' in text:
+                            continue
+                        
+                        # 检查是否是真正的下一页按钮
+                        if 'page' in href or len(text.strip()) <= 2:  # 只有符号的按钮
+                            has_next_page = True
+                            break
+                
+                # 方式3：查找带有特定class的下一页按钮
+                if not has_next_page:
+                    next_buttons = soup.find_all('a', {'class': re.compile(r'next|paging|pagination')})
+                    for button in next_buttons:
+                        href = button.get('href', '')
+                        text = button.get_text().strip()
+                        
+                        # 排除"上一页"按钮
+                        if '上一页' in text or 'Previous' in text.lower() or 'prev' in text.lower() or '<' in text:
+                            continue
+                        
+                        # 检查是否是真正的下一页按钮
+                        if 'page' in href or any(keyword in text.lower() for keyword in ['next', '下一', '>']):
+                            has_next_page = True
+                            break
+                
+                # 计算总页数
+                calculated_total_pages = 1
+                
+                if unique_page_numbers:
+                    # 如果有页码列表，总页数为最大页码
+                    calculated_total_pages = max(unique_page_numbers)
+                elif has_next_page:
+                    # 如果有下一页按钮，总页数为当前页+1
+                    calculated_total_pages = page + 1
                 else:
-                    # 2. 检查是否有下一页按钮
-                    has_next_page = bool(soup.find_all('a', text=self.REGEX_NEXT_PAGE))
-                    if has_next_page:
-                        total_pages = page + 1
-                        print(f"检测到下一页按钮，总页数设为: {total_pages}")
-                    
-                # 3. 确保总页数至少为1
-                total_pages = max(1, total_pages)
+                    # 如果没有下一页按钮，当前页就是最后一页
+                    calculated_total_pages = page
+                
+                # 进一步优化：如果检测到有下一页，但页码列表显示当前页接近最大页码，可能当前页就是最后一页
+                if has_next_page and unique_page_numbers:
+                    max_page = max(unique_page_numbers)
+                    if page >= max_page:
+                        # 当前页大于或等于页码列表中的最大页码，可能当前页就是最后一页
+                        has_next_page = False
+                        calculated_total_pages = page
+                
+                # 确保总页数至少为1
+                total_pages = max(1, calculated_total_pages)
                 
                 result = {
                     'query': query,
@@ -352,20 +394,15 @@ class Hanime1API:
                     'videos': videos,
                     'has_results': len(videos) > 0
                 }
-                
-                print(f"搜索完成，返回视频数量: {len(videos)}, 总页数: {total_pages}")
             
             except Exception as e:
-                print(f"搜索错误: {e}")
-                import traceback
-                traceback.print_exc()
                 return None
             
             return result
     
     def get_video_info(self, video_id):
         """
-        获取视频详细信息，使用Han1meViewer-main的代码逻辑
+        获取视频详细信息
         """
         url = f"{self.base_url}/watch?v={video_id}"
         max_retries = 2
@@ -373,7 +410,6 @@ class Hanime1API:
         for retry in range(max_retries):
             try:
                 response = self.session.get(url, timeout=12)
-                
                 if response.status_code != 200:
                     return None
                 
@@ -395,11 +431,10 @@ class Hanime1API:
                     'thumbnail': ''
                 }
                 
-                # 解析标题（一次性获取，避免重复查询）
+                # 解析标题
                 title_tag = soup.find('title')
                 if title_tag:
                     full_title = title_tag.get_text(strip=True)
-                    # 移除所有常见的网站后缀
                     cleaned_title = self.REGEX_TITLE_CLEAN.sub('', full_title)
                     video_info['title'] = cleaned_title.strip()
                 
@@ -443,9 +478,28 @@ class Hanime1API:
                         if src:
                             if not src.startswith('http'):
                                 src = urljoin(self.base_url, src)
+                            
+                            # 解析质量值，转换为数字以便比较
+                            quality = source.get('size', 'unknown')
+                            quality_num = 0
+                            
+                            # 尝试从quality字符串中提取数字
+                            if isinstance(quality, str):
+                                # 移除可能的'p'后缀（如720p -> 720）
+                                quality_str = quality.lower().replace('p', '')
+                                # 尝试转换为整数
+                                try:
+                                    quality_num = int(quality_str)
+                                except ValueError:
+                                    # 如果无法转换，保持为0
+                                    quality_num = 0
+                            elif isinstance(quality, int):
+                                quality_num = quality
+                            
                             video_info['video_sources'].append({
                                 'url': src,
-                                'quality': source.get('size', 'unknown'),
+                                'quality': quality,
+                                'quality_num': quality_num,
                                 'type': source.get('type', 'video/mp4')
                             })
                 
@@ -462,11 +516,15 @@ class Hanime1API:
                                     video_info['video_sources'].append({
                                         'url': video_url,
                                         'quality': 'unknown',
+                                        'quality_num': 0,
                                         'type': 'video/mp4'
                                     })
-                                    break  # 找到后立即停止循环
+                                    break
                 
-                # 解析标签（一次性查询所有标签）
+                # 对视频源按照质量从高到低排序
+                video_info['video_sources'].sort(key=lambda x: x['quality_num'], reverse=True)
+                
+                # 解析标签
                 tags_div = soup.find('div', class_='video-tags-wrapper')
                 if tags_div:
                     tag_links = tags_div.find_all('a')
@@ -475,14 +533,14 @@ class Hanime1API:
                         tag_text = link.get_text(strip=True)
                         if tag_text and tag_text != '#' and 'http' not in tag_text:
                             tags.append(tag_text)
-                    video_info['tags'] = tags  # 一次性赋值，减少属性访问
+                    video_info['tags'] = tags
                 
                 # 解析描述
                 description_div = soup.find('div', class_='video-caption-text')
                 if description_div:
                     video_info['description'] = description_div.get_text(strip=True)
                 
-                # 解析相关视频（优化：先收集所有相关视频，再去重）
+                # 解析相关视频
                 related_videos = soup.find_all('div', class_='related-watch-wrap')
                 series = []
                 seen_vids = set()
@@ -499,14 +557,12 @@ class Hanime1API:
                     
                     vid = match.group(1)
                     if vid in seen_vids:
-                        continue  # 避免重复处理同一视频
+                        continue
                     seen_vids.add(vid)
                     
                     # 获取标题
                     title_elem = item.find('div', class_=self.REGEX_TITLE_CLASS)
-                    title = title_elem.get_text(strip=True) if title_elem else ''
-                    if not title:
-                        title = item.get('title', '')
+                    title = title_elem.get_text(strip=True) if title_elem else item.get('title', '')
                     
                     # 获取缩略图
                     img_tag = item.find('img')
@@ -525,8 +581,7 @@ class Hanime1API:
                         'duration': duration
                     })
                 
-                video_info['series'] = series  # 一次性赋值，减少属性访问和后续去重
-                
+                video_info['series'] = series
                 return video_info
             
             except Exception as e:

@@ -517,6 +517,12 @@ class DownloadWorker(QRunnable):
         self.last_progress_value = 0  # 上次更新进度值
         self.progress_update_interval = 0.1  # 更新间隔（秒）
         self.progress_update_threshold = 1.0  # 进度变化阈值（百分比）
+        
+        # 下载速度计算
+        self.start_time = time.time()
+        self.last_speed_update = 0
+        self.last_downloaded_size = 0
+        self.current_speed = 0  # 当前下载速度（字节/秒）
     
     @pyqtSlot()
     def run(self):
@@ -656,13 +662,23 @@ class DownloadWorker(QRunnable):
                         downloaded_size += len(chunk)
                         progress = (downloaded_size / file_total_size) * 100 if file_total_size > 0 else 0
                         
+                        # 计算下载速度
+                        current_time = time.time()
+                        time_diff = current_time - self.last_speed_update
+                        if time_diff >= 1.0:  # 每秒更新一次速度
+                            bytes_diff = downloaded_size - self.last_downloaded_size
+                            self.current_speed = bytes_diff / time_diff
+                            self.last_speed_update = current_time
+                            self.last_downloaded_size = downloaded_size
+                        
                         # 使用节流机制更新进度
                         if self._should_update_progress(progress):
                             self.signals.progress.emit({
                                 'progress': progress,
                                 'filename': self.filename,
                                 'size': downloaded_size,
-                                'total_size': file_total_size
+                                'total_size': file_total_size,
+                                'speed': self.current_speed  # 添加下载速度信息
                             })
     
     def _download_chunk(self, index, range_tuple, file_total_size, downloaded_size_container):
@@ -703,13 +719,23 @@ class DownloadWorker(QRunnable):
                             downloaded_size_container[0] += len(chunk)
                             current_progress = (downloaded_size_container[0] / file_total_size) * 100
                             
+                            # 计算下载速度
+                            current_time = time.time()
+                            time_diff = current_time - self.last_speed_update
+                            if time_diff >= 1.0:  # 每秒更新一次速度
+                                bytes_diff = downloaded_size_container[0] - self.last_downloaded_size
+                                self.current_speed = bytes_diff / time_diff
+                                self.last_speed_update = current_time
+                                self.last_downloaded_size = downloaded_size_container[0]
+                            
                             # 使用节流机制更新进度
                             if self._should_update_progress(current_progress):
                                 self.signals.progress.emit({
                                     'progress': current_progress,
                                     'filename': self.filename,
                                     'size': downloaded_size_container[0],
-                                    'total_size': file_total_size
+                                    'total_size': file_total_size,
+                                    'speed': self.current_speed  # 添加下载速度信息
                                 })
         
         return {'size': downloaded_chunk_size}
@@ -1642,9 +1668,14 @@ class Hanime1GUI(QMainWindow):
             downloaded_size_mb = total_downloaded / (1024 * 1024)
             self.download_info.setText(f"同时下载: {len(active_downloads)} 个任务 - 总进度: {downloaded_size_mb:.1f}MB / {total_size_mb:.1f}MB")
         else:
-            # 没有活跃下载时重置进度条
-            self.download_progress.setValue(0)
-            self.download_info.setText("准备下载")
+            # 检查是否有等待中的任务
+            pending_count = sum(1 for d in self.downloads if d['status'] == 'pending')
+            if pending_count > 0:
+                self.download_info.setText(f"准备下载: {pending_count} 个任务等待中")
+            else:
+                # 没有活跃下载和等待任务时重置进度条
+                self.download_progress.setValue(0)
+                self.download_info.setText("准备下载")
     
     def on_download_finished(self, index):
         """下载完成回调"""
@@ -1767,9 +1798,12 @@ class Hanime1GUI(QMainWindow):
                 self.calculate_and_update_overall_progress()
                 
                 if retry_count < download.get('max_retries', 3):
-                    # 还有重试机会，将状态改为pending，等待重试
+                    # 还有重试机会，将状态改为pending，立即触发重试
                     self.downloads[i]['status'] = 'pending'
                     self.statusBar().showMessage(f"视频 {download['title'][:20]}... 下载出错，将重试 ({retry_count}/{download.get('max_retries', 3)})")
+                    
+                    # 立即检查并重试失败的下载任务
+                    self.check_and_retry_failed_downloads()
                 else:
                     # 重试次数已达上限
                     self.downloads[i]['status'] = 'error'
@@ -1887,8 +1921,16 @@ class Hanime1GUI(QMainWindow):
     def on_video_info_for_retry(self, video_info, index):
         """获取视频信息用于重试下载"""
         if video_info and video_info['video_sources']:
-            # 选择质量最高的源进行下载
-            source = video_info['video_sources'][0]
+            # 根据用户设置选择画质
+            download_quality = self.settings.get('download_quality', '最高')
+            video_sources = video_info['video_sources']
+            
+            if download_quality == '最高':
+                # 选择质量最高的源进行下载
+                source = video_sources[0]
+            else:
+                # 选择质量最低的源进行下载
+                source = video_sources[-1]
             
             # 更新下载任务的URL
             self.downloads[index]['url'] = source['url']
@@ -1978,8 +2020,18 @@ class Hanime1GUI(QMainWindow):
     def on_video_info_for_download(self, video_info):
         """获取视频信息用于下载"""
         if video_info and video_info['video_sources']:
-            # 选择质量最高的源进行下载
-            source = video_info['video_sources'][0]
+            # 根据用户设置选择画质
+            download_quality = self.settings.get('download_quality', '最高')
+            video_sources = video_info['video_sources']
+            
+            if download_quality == '最高':
+                # 选择质量最高的源进行下载
+                # 假设video_sources列表已经按质量从高到低排序
+                source = video_sources[0]
+            else:
+                # 选择质量最低的源进行下载
+                source = video_sources[-1]
+            
             self.add_to_download_queue(video_info, source)
     
     def load_favorites(self):
