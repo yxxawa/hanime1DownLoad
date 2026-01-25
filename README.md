@@ -1,9 +1,10 @@
-# Hanime1下载器
+<img width="1987" height="1437" alt="8a92a6fc-4f84-4cc7-a9ab-809241942e93" src="https://github.com/user-attachments/assets/58b9ebfc-1367-4968-9ebe-f0ef82dddeab" /># Hanime1下载器
 
-一个功能强大的Hanime1视频搜索和下载工具，支持多线程下载、批量下载和灵活的配置选项。   
-你可以导出分享自己的收藏夹到hanime1.yxxawa.top
+ 
+<img width="1987" height="1437" alt="8a92a6fc-4f84-4cc7-a9ab-809241942e93" src="https://github.com/user-attachments/assets/b11c525b-566c-44da-b275-3a33bdbd9613" />
 
 ## 功能特点
+
 
 ### 🔍 搜索功能
 - 支持关键词搜索Hanime1视频
