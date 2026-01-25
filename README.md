@@ -1,7 +1,5 @@
 # Hanime1下载器
-
- 
-<img width="1987" height="1437" alt="8a92a6fc-4f84-4cc7-a9ab-809241942e93" src="https://github.com/user-attachments/assets/b11c525b-566c-44da-b275-3a33bdbd9613" />
+<img width="1987" height="1437" alt="演示" src="https://github.com/user-attachments/assets/8e7b71ab-98ab-4731-a158-f52af5e45e25" />
 
 ## 功能特点
 
