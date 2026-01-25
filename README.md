@@ -1,4 +1,4 @@
-<img width="1987" height="1437" alt="8a92a6fc-4f84-4cc7-a9ab-809241942e93" src="https://github.com/user-attachments/assets/58b9ebfc-1367-4968-9ebe-f0ef82dddeab" /># Hanime1下载器
+# Hanime1下载器
 
  
 <img width="1987" height="1437" alt="8a92a6fc-4f84-4cc7-a9ab-809241942e93" src="https://github.com/user-attachments/assets/b11c525b-566c-44da-b275-3a33bdbd9613" />
