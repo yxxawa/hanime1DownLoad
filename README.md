@@ -1,7 +1,8 @@
 # Hanime1Download   
 ## 界面演示
-<img width="2560" height="1528" alt="image" src="https://github.com/user-attachments/assets/4f395856-ee3a-4da3-9eb3-ddc41193ed15" />
-<img width="2560" height="1528" alt="image" src="https://github.com/user-attachments/assets/07d05b8a-e950-41c1-afd9-f0439141b2e2" />
+<img width="2560" height="1528" alt="筛选" src="https://github.com/user-attachments/assets/bd3696bf-6b67-4561-b01c-2fd3f7d90ba5" />
+
+<img width="2560" height="1528" alt="设置" src="https://github.com/user-attachments/assets/80f3d2f9-4f96-467a-ad51-5af1efe84258" />
 
 
 ## 功能特点
