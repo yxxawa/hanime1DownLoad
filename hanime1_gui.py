@@ -7,16 +7,315 @@ import time
 import concurrent.futures
 import webbrowser
 import datetime
+import multiprocessing
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
     QLabel, QPushButton, QLineEdit, QSpinBox, QProgressBar, QTextEdit,
     QGroupBox, QFormLayout, QTabWidget, QMenu, QAction, QDialog,
-    QSizePolicy, QRadioButton, QFileDialog, QComboBox, QCheckBox, QMessageBox, QInputDialog
+    QSizePolicy, QRadioButton, QFileDialog, QComboBox, QCheckBox, QMessageBox, QInputDialog,
+    QScrollArea, QGridLayout
 )
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRunnable, QThreadPool, pyqtSlot, QEvent
 from PyQt5.QtGui import QPixmap
 import requests
 
+# 繁体中文到简体中文的映射表
+TAG_MAPPING = {
+    # 影片类型
+    "影片類型": "影片类型",
+    "裏番": "里番",
+    "泡麵番": "泡面番",
+    "Motion Anime": "Motion Anime",
+    "3DCG": "3DCG",
+    "2.5D": "2.5D",
+    "2D動畫": "2D动画",
+    "AI生成": "AI生成",
+    "MMD": "MMD",
+    "Cosplay": "Cosplay",
+    "無碼黃油": "无码黄油",
+    "新番預告": "新番预告",
+    "H漫畫": "H漫画",
+    
+    # 影片属性
+    "無碼": "无码",
+    "AI解碼": "AI解码",
+    "中文字幕": "中文字幕",
+    "中文配音": "中文配音",
+    "同人作品": "同人作品",
+    "斷面圖": "断面图",
+    "ASMR": "ASMR",
+    "1080p": "1080p",
+    "60FPS": "60FPS",
+    
+    # 人物关系
+    "近親": "近亲",
+    "姐": "姐",
+    "妹": "妹",
+    "母": "母",
+    "女兒": "女儿",
+    "師生": "师生",
+    "情侶": "情侣",
+    "青梅竹馬": "青梅竹马",
+    "同事": "同事",
+    
+    # 角色设定
+    "JK": "JK",
+    "處女": "处女",
+    "御姐": "御姐",
+    "熟女": "熟女",
+    "人妻": "人妻",
+    "女教師": "女教师",
+    "男教師": "男教师",
+    "女醫生": "女医生",
+    "女病人": "女病人",
+    "護士": "护士",
+    "OL": "OL",
+    "女警": "女警",
+    "大小姐": "大小姐",
+    "偶像": "偶像",
+    "女僕": "女仆",
+    "巫女": "巫女",
+    "魔女": "魔女",
+    "修女": "修女",
+    "風俗娘": "风俗娘",
+    "公主": "公主",
+    "女忍者": "女忍者",
+    "女戰士": "女战士",
+    "女騎士": "女骑士",
+    "魔法少女": "魔法少女",
+    "異種族": "异种族",
+    "天使": "天使",
+    "妖精": "妖精",
+    "魔物娘": "魔物娘",
+    "魅魔": "魅魔",
+    "吸血鬼": "吸血鬼",
+    "女鬼": "女鬼",
+    "獸娘": "兽娘",
+    "乳牛": "乳牛",
+    "機械娘": "机械娘",
+    "碧池": "碧池",
+    "痴女": "痴女",
+    "雌小鬼": "雌小鬼",
+    "不良少女": "不良少女",
+    "傲嬌": "傲娇",
+    "病嬌": "病娇",
+    "無口": "无口",
+    "無表情": "无表情",
+    "眼神死": "眼神死",
+    "正太": "正太",
+    "偽娘": "伪娘",
+    "扶他": "扶他",
+    
+    # 外貌身材
+    "短髮": "短发",
+    "馬尾": "马尾",
+    "雙馬尾": "双马尾",
+    "丸子頭": "丸子头",
+    "巨乳": "巨乳",
+    "乳環": "乳环",
+    "舌環": "舌环",
+    "貧乳": "贫乳",
+    "黑皮膚": "黑皮肤",
+    "曬痕": "晒痕",
+    "眼鏡娘": "眼镜娘",
+    "獸耳": "兽耳",
+    "尖耳朵": "尖耳朵",
+    "異色瞳": "异色瞳",
+    "美人痣": "美人痣",
+    "肌肉女": "肌肉女",
+    "白虎": "白虎",
+    "陰毛": "阴毛",
+    "腋毛": "腋毛",
+    "大屌": "大屌",
+    "著衣": "着衣",
+    "水手服": "水手服",
+    "體操服": "体操服",
+    "泳裝": "泳装",
+    "比基尼": "比基尼",
+    "死庫水": "死库水",
+    "和服": "和服",
+    "兔女郎": "兔女郎",
+    "圍裙": "围裙",
+    "啦啦隊": "啦啦队",
+    "絲襪": "丝袜",
+    "吊襪帶": "吊袜带",
+    "熱褲": "热裤",
+    "迷你裙": "迷你裙",
+    "性感內衣": "性感内衣",
+    "緊身衣": "紧身衣",
+    "丁字褲": "丁字裤",
+    "高跟鞋": "高跟鞋",
+    "睡衣": "睡衣",
+    "婚紗": "婚纱",
+    "旗袍": "旗袍",
+    "古裝": "古装",
+    "哥德": "哥德",
+    "口罩": "口罩",
+    "刺青": "刺青",
+    "淫紋": "淫纹",
+    "身體寫字": "身体写字",
+    
+    # 情境场所
+    "校園": "校园",
+    "教室": "教室",
+    "圖書館": "图书馆",
+    "保健室": "保健室",
+    "游泳池": "游泳池",
+    "愛情賓館": "爱情宾馆",
+    "醫院": "医院",
+    "辦公室": "办公室",
+    "浴室": "浴室",
+    "窗邊": "窗边",
+    "公共廁所": "公共厕所",
+    "公眾場合": "公众场合",
+    "戶外野戰": "户外野战",
+    "電車": "电车",
+    "車震": "车震",
+    "遊艇": "游艇",
+    "露營帳篷": "露营帐篷",
+    "電影院": "电影院",
+    "健身房": "健身房",
+    "沙灘": "沙滩",
+    "溫泉": "温泉",
+    "夜店": "夜店",
+    "監獄": "监狱",
+    "教堂": "教堂",
+    
+    # 故事剧情
+    "純愛": "纯爱",
+    "戀愛喜劇": "恋爱喜剧",
+    "後宮": "后宫",
+    "十指緊扣": "十指紧扣",
+    "開大車": "开大车",
+    "NTR": "NTR",
+    "精神控制": "精神控制",
+    "藥物": "药物",
+    "痴漢": "痴汉",
+    "阿嘿顏": "阿嘿颜",
+    "精神崩潰": "精神崩溃",
+    "獵奇": "猎奇",
+    "BDSM": "BDSM",
+    "綑綁": "捆绑",
+    "眼罩": "眼罩",
+    "項圈": "项圈",
+    "調教": "调教",
+    "異物插入": "异物插入",
+    "尋歡洞": "寻欢洞",
+    "肉便器": "肉便器",
+    "性奴隸": "性奴隶",
+    "胃凸": "胃凸",
+    "強制": "强制",
+    "輪姦": "轮奸",
+    "凌辱": "凌辱",
+    "性暴力": "性暴力",
+    "逆強制": "逆强制",
+    "女王樣": "女王样",
+    "榨精": "榨精",
+    "母女丼": "母女丼",
+    "姐妹丼": "姐妹丼",
+    "出軌": "出轨",
+    "醉酒": "醉酒",
+    "攝影": "摄影",
+    "睡眠姦": "睡眠奸",
+    "機械姦": "机械奸",
+    "蟲姦": "虫奸",
+    "性轉換": "性转换",
+    "百合": "百合",
+    "耽美": "耽美",
+    "時間停止": "时间停止",
+    "異世界": "异世界",
+    "怪獸": "怪兽",
+    "哥布林": "哥布林",
+    "世界末日": "世界末日",
+    
+    # 性交体位
+    "手交": "手交",
+    "指交": "指交",
+    "乳交": "乳交",
+    "乳頭交": "乳头交",
+    "肛交": "肛交",
+    "雙洞齊下": "双洞齐下",
+    "腳交": "脚交",
+    "素股": "素股",
+    "拳交": "拳交",
+    "3P": "3P",
+    "群交": "群交",
+    "口交": "口交",
+    "深喉嚨": "深喉咙",
+    "口爆": "口爆",
+    "吞精": "吞精",
+    "舔蛋蛋": "舔蛋蛋",
+    "舔穴": "舔穴",
+    "69": "69",
+    "自慰": "自慰",
+    "腋交": "腋交",
+    "舔腋下": "舔腋下",
+    "髮交": "发交",
+    "舔耳朵": "舔耳朵",
+    "舔腳": "舔脚",
+    "內射": "内射",
+    "外射": "外射",
+    "顏射": "颜射",
+    "潮吹": "潮吹",
+    "懷孕": "怀孕",
+    "噴奶": "喷奶",
+    "放尿": "放尿",
+    "排便": "排便",
+    "騎乘位": "骑乘位",
+    "背後位": "背后位",
+    "顏面騎乘": "颜面骑乘",
+    "火車便當": "火车便当",
+    "一字馬": "一字马",
+    "性玩具": "性玩具",
+    "飛機杯": "飞机杯",
+    "跳蛋": "跳蛋",
+    "毒龍鑽": "毒龙钻",
+    "觸手": "触手",
+    "獸交": "兽交",
+    "頸手枷": "颈手枷",
+    "扯頭髮": "扯头发",
+    "掐脖子": "掐脖子",
+    "打屁股": "打屁股",
+    "肉棒打臉": "肉棒打脸",
+    "陰道外翻": "阴道外翻",
+    "男乳首責": "男乳首责",
+    "接吻": "接吻",
+    "舌吻": "舌吻",
+    "POV": "POV",
+    
+    # 排序方式
+    "排序方式": "排序方式",
+    "最新上市": "最新上市",
+    "最新上傳": "最新上传",
+    "本日排行": "本日排行",
+    "本週排行": "本周排行",
+    "本月排行": "本月排行",
+    "觀看次數": "观看次数",
+    "讚好比例": "点赞比例",
+    "時長最長": "时长最长",
+    "他們在看": "他们在看",
+    
+    # 发布日期
+    "發佈日期": "发布日期",
+    "全部": "全部",
+    "過去 24 小時": "过去 24 小时",
+    "過去 2 天": "过去 2 天",
+    "過去 1 週": "过去 1 周",
+    "過去 1 個月": "过去 1 个月",
+    "過去 3 個月": "过去 3 个月",
+    "過去 1 年": "过去 1 年",
+    
+    # 时长
+    "時長": "时长",
+    "1 分鐘 +": "1 分钟 +",
+    "5 分鐘 +": "5 分钟 +",
+    "10 分鐘 +": "10 分钟 +",
+    "20 分鐘 +": "20 分钟 +",
+    "30 分鐘 +": "30 分钟 +",
+    "60 分鐘 +": "60 分钟 +",
+    "0 - 10 分鐘": "0 - 10 分钟",
+    "0 - 20 分鐘": "0 - 20 分钟"
+}
 
 
 from hanime1_api import Hanime1API
@@ -30,11 +329,12 @@ class WorkerSignals(QObject):
     progress = pyqtSignal(dict)
 
 class SearchWorker(QRunnable):
-    def __init__(self, api, query, page=1):
+    def __init__(self, api, query, page=1, filter_params=None):
         super().__init__()
         self.api = api
         self.query = query
         self.page = page
+        self.filter_params = filter_params or {}
         self.signals = WorkerSignals()
 
     @pyqtSlot()
@@ -42,7 +342,8 @@ class SearchWorker(QRunnable):
         try:
             result = self.api.search_videos(
                 query=self.query,
-                page=self.page
+                page=self.page,
+                filter_params=self.filter_params
             )
             self.signals.result.emit(result)
         except Exception as e:
@@ -209,6 +510,252 @@ class GetVideoInfoWorker(QRunnable):
             self.signals.error.emit(str(e))
         finally:
             self.signals.finished.emit()
+
+class FilterDialog(QDialog):
+    def __init__(self, filter_params, parent=None):
+        super().__init__(parent)
+        self.filter_params = filter_params.copy()
+        # 设置默认值
+        self.default_params = {
+            'genre': '',
+            'sort': '',
+            'date': '',
+            'duration': '',
+            'tags': [],
+            'broad': False
+        }
+        # 合并默认设置
+        for key, value in self.default_params.items():
+            if key not in self.filter_params:
+                self.filter_params[key] = value
+        self.parent = parent
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("筛选设置")
+        self.setGeometry(300, 300, 600, 800)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+
+        # 影片类型
+        genre_group = QGroupBox("影片类型")
+        genre_layout = QVBoxLayout(genre_group)
+
+        self.genre_combo = QComboBox()
+        self.genre_combo.addItem("全部", "")
+        self.genre_combo.addItem("里番", "裏番")
+        self.genre_combo.addItem("泡面番", "泡麵番")
+        self.genre_combo.addItem("Motion Anime", "Motion Anime")
+        self.genre_combo.addItem("3DCG", "3DCG")
+        self.genre_combo.addItem("2.5D", "2.5D")
+        self.genre_combo.addItem("2D动画", "2D動畫")
+        self.genre_combo.addItem("AI生成", "AI生成")
+        self.genre_combo.addItem("MMD", "MMD")
+        self.genre_combo.addItem("Cosplay", "Cosplay")
+
+        # 设置当前选中的类型
+        current_genre = self.filter_params.get('genre', '')
+        index = self.genre_combo.findData(current_genre)
+        if index != -1:
+            self.genre_combo.setCurrentIndex(index)
+
+        genre_layout.addWidget(self.genre_combo)
+        main_layout.addWidget(genre_group)
+
+        # 排序方式
+        sort_group = QGroupBox("排序方式")
+        sort_layout = QVBoxLayout(sort_group)
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("默认", "")
+        self.sort_combo.addItem("最新上市", "最新上市")
+        self.sort_combo.addItem("最新上传", "最新上傳")
+        self.sort_combo.addItem("本日排行", "本日排行")
+        self.sort_combo.addItem("本周排行", "本週排行")
+        self.sort_combo.addItem("本月排行", "本月排行")
+        self.sort_combo.addItem("观看次数", "觀看次數")
+        self.sort_combo.addItem("点赞比例", "讚好比例")
+        self.sort_combo.addItem("时长最长", "時長最長")
+        self.sort_combo.addItem("他们在看", "他們在看")
+
+        # 设置当前选中的排序方式
+        current_sort = self.filter_params.get('sort', '')
+        index = self.sort_combo.findData(current_sort)
+        if index != -1:
+            self.sort_combo.setCurrentIndex(index)
+
+        sort_layout.addWidget(self.sort_combo)
+        main_layout.addWidget(sort_group)
+
+        # 发布日期
+        date_group = QGroupBox("发布日期")
+        date_layout = QVBoxLayout(date_group)
+
+        self.date_combo = QComboBox()
+        self.date_combo.addItem("全部", "")
+        self.date_combo.addItem("过去 24 小时", "過去 24 小時")
+        self.date_combo.addItem("过去 2 天", "過去 2 天")
+        self.date_combo.addItem("过去 1 周", "過去 1 週")
+        self.date_combo.addItem("过去 1 个月", "過去 1 個月")
+        self.date_combo.addItem("过去 3 个月", "過去 3 個月")
+        self.date_combo.addItem("过去 1 年", "過去 1 年")
+
+        # 设置当前选中的日期
+        current_date = self.filter_params.get('date', '')
+        index = self.date_combo.findData(current_date)
+        if index != -1:
+            self.date_combo.setCurrentIndex(index)
+
+        date_layout.addWidget(self.date_combo)
+        main_layout.addWidget(date_group)
+
+        # 时长
+        duration_group = QGroupBox("时长")
+        duration_layout = QVBoxLayout(duration_group)
+
+        self.duration_combo = QComboBox()
+        self.duration_combo.addItem("全部", "")
+        self.duration_combo.addItem("1 分钟 +", "1 分鐘 +")
+        self.duration_combo.addItem("5 分钟 +", "5 分鐘 +")
+        self.duration_combo.addItem("10 分钟 +", "10 分鐘 +")
+        self.duration_combo.addItem("20 分钟 +", "20 分鐘 +")
+        self.duration_combo.addItem("30 分钟 +", "30 分鐘 +")
+        self.duration_combo.addItem("60 分钟 +", "60 分鐘 +")
+        self.duration_combo.addItem("0 - 10 分钟", "0 - 10 分鐘")
+        self.duration_combo.addItem("0 - 20 分钟", "0 - 20 分鐘")
+
+        # 设置当前选中的时长
+        current_duration = self.filter_params.get('duration', '')
+        index = self.duration_combo.findData(current_duration)
+        if index != -1:
+            self.duration_combo.setCurrentIndex(index)
+
+        duration_layout.addWidget(self.duration_combo)
+        main_layout.addWidget(duration_group)
+
+        # 广泛配对
+        broad_group = QGroupBox("配对方式")
+        broad_layout = QVBoxLayout(broad_group)
+
+        self.broad_checkbox = QCheckBox("广泛配对（配对所有包含任何一个选择的标签的影片）")
+        self.broad_checkbox.setChecked(self.filter_params.get('broad', False))
+        broad_layout.addWidget(self.broad_checkbox)
+        main_layout.addWidget(broad_group)
+
+        # 内容标签
+        tags_group = QGroupBox("内容标签")
+        tags_layout = QVBoxLayout(tags_group)
+
+        # 标签分类
+        tag_categories = {
+            "影片屬性": ["無碼", "AI解碼", "中文字幕", "中文配音", "同人作品", "斷面圖", "ASMR", "1080p", "60FPS"],
+            "人物關係": ["近親", "姐", "妹", "母", "女兒", "師生", "情侶", "青梅竹馬", "同事"],
+            "角色設定": ["JK", "處女", "御姐", "熟女", "人妻", "女教師", "男教師", "女醫生", "女病人", "護士", "OL", "女警", "大小姐", "偶像", "女僕", "巫女", "魔女", "修女", "風俗娘", "公主", "女忍者", "女戰士", "女騎士", "魔法少女", "異種族", "天使", "妖精", "魔物娘", "魅魔", "吸血鬼", "女鬼", "獸娘", "乳牛", "機械娘", "碧池", "痴女", "雌小鬼", "不良少女", "傲嬌", "病嬌", "無口", "無表情", "眼神死", "正太", "偽娘", "扶他"],
+            "外貌身材": ["短髮", "馬尾", "雙馬尾", "丸子頭", "巨乳", "乳環", "舌環", "貧乳", "黑皮膚", "曬痕", "眼鏡娘", "獸耳", "尖耳朵", "異色瞳", "美人痣", "肌肉女", "白虎", "陰毛", "腋毛", "大屌", "著衣", "水手服", "體操服", "泳裝", "比基尼", "死庫水", "和服", "兔女郎", "圍裙", "啦啦隊", "絲襪", "吊襪帶", "熱褲", "迷你裙", "性感內衣", "緊身衣", "丁字褲", "高跟鞋", "睡衣", "婚紗", "旗袍", "古裝", "哥德", "口罩", "刺青", "淫紋", "身體寫字"],
+            "情境場所": ["校園", "教室", "圖書館", "保健室", "游泳池", "愛情賓館", "醫院", "辦公室", "浴室", "窗邊", "公共廁所", "公眾場合", "戶外野戰", "電車", "車震", "遊艇", "露營帳篷", "電影院", "健身房", "沙灘", "溫泉", "夜店", "監獄", "教堂"],
+            "故事劇情": ["純愛", "戀愛喜劇", "後宮", "十指緊扣", "開大車", "NTR", "精神控制", "藥物", "痴漢", "阿嘿顏", "精神崩潰", "獵奇", "BDSM", "綑綁", "眼罩", "項圈", "調教", "異物插入", "尋歡洞", "肉便器", "性奴隸", "胃凸", "強制", "輪姦", "凌辱", "性暴力", "逆強制", "女王樣", "榨精", "母女丼", "姐妹丼", "出軌", "醉酒", "攝影", "睡眠姦", "機械姦", "蟲姦", "性轉換", "百合", "耽美", "時間停止", "異世界", "怪獸", "哥布林", "世界末日"],
+            "性交體位": ["手交", "指交", "乳交", "乳頭交", "肛交", "雙洞齊下", "腳交", "素股", "拳交", "3P", "群交", "口交", "深喉嚨", "口爆", "吞精", "舔蛋蛋", "舔穴", "69", "自慰", "腋交", "舔腋下", "髮交", "舔耳朵", "舔腳", "內射", "外射", "顏射", "潮吹", "懷孕", "噴奶", "放尿", "排便", "騎乘位", "背後位", "顏面騎乘", "火車便當", "一字馬", "性玩具", "飛機杯", "跳蛋", "毒龍鑽", "觸手", "獸交", "頸手枷", "扯頭髮", "掐脖子", "打屁股", "肉棒打臉", "陰道外翻", "男乳首責", "接吻", "舌吻", "POV"]
+        }
+
+        # 存储标签复选框（键为繁体中文标签，值为复选框对象）
+        self.tag_checkboxes = {}
+
+        # 添加标签分类和复选框
+        for category, tags in tag_categories.items():
+            # 分类标题（使用简体中文显示）
+            category_label = QLabel(f"{TAG_MAPPING.get(category, category)}:")
+            tags_layout.addWidget(category_label)
+
+            # 标签网格布局
+            tag_grid = QWidget()
+            tag_grid_layout = QGridLayout(tag_grid)
+            tag_grid_layout.setSpacing(5)
+
+            # 添加标签复选框
+            row = 0
+            col = 0
+            max_cols = 4
+
+            for tag in tags:
+                # 检查tag是否是元组（显示名称, 实际标签）
+                if isinstance(tag, tuple):
+                    display_name, actual_tag = tag
+                else:
+                    # 如果不是元组，使用标签本身作为显示名称和实际标签
+                    display_name = TAG_MAPPING.get(tag, tag)
+                    actual_tag = tag
+                
+                checkbox = QCheckBox(display_name)  # 显示简体中文
+                checkbox.setChecked(actual_tag in self.filter_params.get('tags', []))  # 检查实际标签是否在选中列表中
+                self.tag_checkboxes[actual_tag] = checkbox  # 使用实际标签作为键
+                tag_grid_layout.addWidget(checkbox, row, col)
+                col += 1
+                if col >= max_cols:
+                    col = 0
+                    row += 1
+
+            tags_layout.addWidget(tag_grid)
+
+        # 添加滚动区域
+        scroll_area = QWidget()
+        scroll_area.setLayout(tags_layout)
+        scroll = QScrollArea()
+        scroll.setWidget(scroll_area)
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(400)
+        main_layout.addWidget(scroll)
+
+        # 按钮组
+        button_layout = QHBoxLayout()
+        self.reset_button = QPushButton("重置")
+        self.reset_button.clicked.connect(self.reset_settings)
+
+        self.save_button = QPushButton("保存")
+        self.save_button.clicked.connect(self.accept)
+
+        button_layout.addWidget(self.reset_button)
+        button_layout.addStretch(1)
+        button_layout.addWidget(self.save_button)
+        main_layout.addLayout(button_layout)
+
+    def reset_settings(self):
+        """重置筛选设置"""
+        # 重置下拉框
+        self.genre_combo.setCurrentIndex(0)
+        self.sort_combo.setCurrentIndex(0)
+        self.date_combo.setCurrentIndex(0)
+        self.duration_combo.setCurrentIndex(0)
+
+        # 重置复选框
+        self.broad_checkbox.setChecked(False)
+
+        # 重置标签复选框
+        for checkbox in self.tag_checkboxes.values():
+            checkbox.setChecked(False)
+
+    def accept(self):
+        """保存筛选设置"""
+        # 收集选中的标签
+        selected_tags = []
+        for tag, checkbox in self.tag_checkboxes.items():
+            if checkbox.isChecked():
+                selected_tags.append(tag)
+
+        # 更新筛选参数
+        self.filter_params['genre'] = self.genre_combo.currentData()
+        self.filter_params['sort'] = self.sort_combo.currentData()
+        self.filter_params['date'] = self.date_combo.currentData()
+        self.filter_params['duration'] = self.duration_combo.currentData()
+        self.filter_params['tags'] = selected_tags
+        self.filter_params['broad'] = self.broad_checkbox.isChecked()
+
+        super().accept()
+
+    def get_filter_params(self):
+        return self.filter_params
+
 
 class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
@@ -439,32 +986,8 @@ class SettingsDialog(QDialog):
         """重写accept方法，在保存设置时同时保存Cookie到会话"""
         # 保存Cookie到会话（如果有输入）
         cookie_text = self.cloudflare_cookie_edit.toPlainText().strip()
-        if cookie_text:
-            try:
-                if hasattr(self.parent, 'api'):
-                    # 清除现有Cookie
-                    self.parent.api.session.cookies.clear()
-
-                    # 添加新Cookie
-                    if cookie_text.startswith('cf_clearance='):
-                        # 直接是cf_clearance=value格式
-                        cf_clearance = cookie_text.split('=', 1)[1]
-                        self.parent.api.session.cookies.set('cf_clearance', cf_clearance, domain='.hanime1.me', path='/')
-                    else:
-                        # 尝试解析完整的Cookie字符串
-                        cookies = cookie_text.split(';')
-                        for cookie in cookies:
-                            cookie = cookie.strip()
-                            if '=' in cookie:
-                                name, value = cookie.split('=', 1)
-                                # 为所有Cookie设置正确的domain和path
-                                self.parent.api.session.cookies.set(name, value, domain='.hanime1.me', path='/')
-
-                    # 保存会话
-                    self.parent.api.save_session()
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"保存Cookie失败: {str(e)}")
-                return
+        if cookie_text and hasattr(self.parent, 'apply_cloudflare_cookie'):
+            self.parent.apply_cloudflare_cookie(cookie_text)
 
         super().accept()
 
@@ -491,7 +1014,7 @@ class DownloadWorker(QRunnable):
     CHUNK_SIZE = 131072  # 下载块大小从8KB增加到128KB，减少I/O操作次数
     MIN_CHUNK_SIZE = 1024 * 1024  # 最小块大小(1MB)，小于此值使用单线程
 
-    def __init__(self, url, filename, save_path=".", num_threads=4):
+    def __init__(self, url, filename, save_path=".", num_threads=4, headers=None, cookies=None):
         """初始化下载工作线程
 
         Args:
@@ -499,18 +1022,35 @@ class DownloadWorker(QRunnable):
             filename: 保存文件名
             save_path: 保存路径
             num_threads: 线程数量
+            headers: 请求头
+            cookies: Cookie字典
         """
         super().__init__()
         self.url = url
         self.filename = filename
         self.save_path = save_path
         self.num_threads = num_threads
+        self.headers = headers or {'User-Agent': self.USER_AGENT}
+        self.cookies = cookies or {}
         self.signals = WorkerSignals()
         self.is_cancelled = False
         self.is_paused = False
         self.progress_lock = None
         self.pause_event = threading.Event()
         self.pause_event.set()  # 默认不暂停
+
+        # 初始化 Session
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=num_threads + 2,
+            pool_maxsize=num_threads + 2,
+            max_retries=0  # 我们手动处理分块重试
+        )
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        self.session.headers.update(self.headers)
+        if self.cookies:
+            self.session.cookies.update(self.cookies)
 
         # 进度更新节流机制
         self.last_progress_update = 0  # 上次更新时间
@@ -565,11 +1105,7 @@ class DownloadWorker(QRunnable):
         Returns:
             tuple: (文件总大小, 是否支持断点续传)
         """
-        headers = {
-            'User-Agent': self.USER_AGENT
-        }
-
-        response = requests.head(self.url, headers=headers, timeout=10)
+        response = self.session.head(self.url, timeout=10)
         response.raise_for_status()
 
         content_length = response.headers.get('content-length')
@@ -645,11 +1181,7 @@ class DownloadWorker(QRunnable):
             file_total_size: 文件总大小
             downloaded_size: 已下载大小
         """
-        headers = {
-            'User-Agent': self.USER_AGENT
-        }
-
-        with requests.get(self.url, headers=headers, stream=True, timeout=30) as r:
+        with self.session.get(self.url, stream=True, timeout=(5, 30)) as r:
             r.raise_for_status()
             with open(self.full_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=self.CHUNK_SIZE):
@@ -695,48 +1227,61 @@ class DownloadWorker(QRunnable):
         """
         start, end = range_tuple
         headers = {
-            'User-Agent': self.USER_AGENT,
             'Range': f'bytes={start}-{end}'
         }
 
         temp_file_path = f"{self.full_path}.part{index}"
         downloaded_chunk_size = 0
+        max_retries = 3
 
-        with requests.get(self.url, headers=headers, stream=True, timeout=30) as r:
-            r.raise_for_status()
-            with open(temp_file_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=self.CHUNK_SIZE):
-                    if self.is_cancelled:
-                        return {'size': 0}
-                    # 检查是否暂停
-                    self.pause_event.wait()  # 阻塞直到继续信号
-                    if chunk:
-                        f.write(chunk)
-                        downloaded_chunk_size += len(chunk)
+        for attempt in range(max_retries):
+            try:
+                with self.session.get(self.url, headers=headers, stream=True, timeout=(5, 30)) as r:
+                    r.raise_for_status()
+                    with open(temp_file_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=self.CHUNK_SIZE):
+                            if self.is_cancelled:
+                                return {'size': 0}
+                            # 检查是否暂停
+                            self.pause_event.wait()  # 阻塞直到继续信号
+                            if chunk:
+                                f.write(chunk)
+                                downloaded_chunk_size += len(chunk)
 
-                        # 更新全局进度
-                        with self.progress_lock:
-                            downloaded_size_container[0] += len(chunk)
-                            current_progress = (downloaded_size_container[0] / file_total_size) * 100
+                                # 更新全局进度
+                                with self.progress_lock:
+                                    downloaded_size_container[0] += len(chunk)
+                                    current_progress = (downloaded_size_container[0] / file_total_size) * 100
 
-                            # 计算下载速度
-                            current_time = time.time()
-                            time_diff = current_time - self.last_speed_update
-                            if time_diff >= 1.0:  # 每秒更新一次速度
-                                bytes_diff = downloaded_size_container[0] - self.last_downloaded_size
-                                self.current_speed = bytes_diff / time_diff
-                                self.last_speed_update = current_time
-                                self.last_downloaded_size = downloaded_size_container[0]
+                                    # 计算下载速度
+                                    current_time = time.time()
+                                    time_diff = current_time - self.last_speed_update
+                                    if time_diff >= 1.0:  # 每秒更新一次速度
+                                        bytes_diff = downloaded_size_container[0] - self.last_downloaded_size
+                                        self.current_speed = bytes_diff / time_diff
+                                        self.last_speed_update = current_time
+                                        self.last_downloaded_size = downloaded_size_container[0]
 
-                            # 使用节流机制更新进度
-                            if self._should_update_progress(current_progress):
-                                self.signals.progress.emit({
-                                    'progress': current_progress,
-                                    'filename': self.filename,
-                                    'size': downloaded_size_container[0],
-                                    'total_size': file_total_size,
-                                    'speed': self.current_speed  # 添加下载速度信息
-                                })
+                                    # 使用节流机制更新进度
+                                    if self._should_update_progress(current_progress):
+                                        self.signals.progress.emit({
+                                            'progress': current_progress,
+                                            'filename': self.filename,
+                                            'size': downloaded_size_container[0],
+                                            'total_size': file_total_size,
+                                            'speed': self.current_speed  # 添加下载速度信息
+                                        })
+                    return {'size': downloaded_chunk_size}
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(1 * (attempt + 1))
+                    # 重置当前块的进度
+                    with self.progress_lock:
+                        downloaded_size_container[0] -= downloaded_chunk_size
+                    downloaded_chunk_size = 0
+                    continue
+                else:
+                    raise e
 
         return {'size': downloaded_chunk_size}
 
@@ -811,7 +1356,10 @@ class Hanime1GUI(QMainWindow):
         super().__init__()
         self.api = Hanime1API()
         self.threadpool = QThreadPool()
-        self.threadpool.setMaxThreadCount(32)  # 设置最大线程数为32，避免过多线程切换
+        # 根据系统CPU核心数动态调整线程池大小，对于I/O密集型任务，设置为核心数的2-4倍
+        cpu_count = multiprocessing.cpu_count()
+        max_threads = min(cpu_count * 3, 16)  # 最大不超过16个线程，避免过多线程切换
+        self.threadpool.setMaxThreadCount(max_threads)
 
         # 初始化设置
         self.settings_file = os.path.join(os.getcwd(), 'settings.json')
@@ -825,7 +1373,8 @@ class Hanime1GUI(QMainWindow):
             'file_naming_rule': '{title}',
             'overwrite_existing': False,
             'cloudflare_cookie': '',
-            'window_size': {'width': 1320, 'height': 1485}
+            'window_size': {'width': 1320, 'height': 1485},
+            'search_history': []
         }
         # 加载设置
         self.settings = self.load_settings()
@@ -836,24 +1385,7 @@ class Hanime1GUI(QMainWindow):
         # 应用Cloudflare Cookie到API实例
         cloudflare_cookie = self.settings.get('cloudflare_cookie', '')
         if cloudflare_cookie:
-            # 清除现有Cookie
-            self.api.session.cookies.clear()
-            # 添加新Cookie
-            if cloudflare_cookie.startswith('cf_clearance='):
-                # 直接是cf_clearance=value格式
-                cf_clearance = cloudflare_cookie.split('=', 1)[1]
-                self.api.session.cookies.set('cf_clearance', cf_clearance, domain='.hanime1.me')
-            else:
-                # 尝试解析完整的Cookie字符串
-                cookies = cloudflare_cookie.split(';')
-                for cookie in cookies:
-                    cookie = cookie.strip()
-                    if '=' in cookie:
-                        name, value = cookie.split('=', 1)
-                        if name == 'cf_clearance':
-                            self.api.session.cookies.set(name, value, domain='.hanime1.me')
-            # 保存会话
-            self.api.save_session()
+            self.apply_cloudflare_cookie(cloudflare_cookie)
 
         # 搜索筛选参数
         self.filter_params = {
@@ -936,14 +1468,23 @@ class Hanime1GUI(QMainWindow):
         parent_layout.addWidget(search_title)
 
         search_layout = QHBoxLayout()
-        self.search_input = QLineEdit()
+        self.search_input = QComboBox()
+        self.search_input.setEditable(True)
         self.search_input.setPlaceholderText("请输入搜索关键词...")
-        self.search_input.returnPressed.connect(self.search_videos)
+        self.search_input.lineEdit().returnPressed.connect(self.search_videos)
+        
+        # 加载历史记录到下拉框
+        self._update_search_history_ui()
+        
         search_layout.addWidget(self.search_input, 1)
 
         self.search_button = QPushButton("搜索")
         self.search_button.clicked.connect(self.search_videos)
         search_layout.addWidget(self.search_button)
+
+        self.filter_button = QPushButton("筛选")
+        self.filter_button.clicked.connect(self.open_filter_dialog)
+        search_layout.addWidget(self.filter_button)
 
         self.settings_button = QPushButton("设置")
         self.settings_button.clicked.connect(self.open_settings)
@@ -999,6 +1540,11 @@ class Hanime1GUI(QMainWindow):
         delete_folder_button = QPushButton("删除")
         delete_folder_button.clicked.connect(self.on_delete_folder)
         favorites_manage_layout.addWidget(delete_folder_button)
+
+        # 重命名收藏夹按钮
+        rename_folder_button = QPushButton("重命名")
+        rename_folder_button.clicked.connect(self.on_rename_folder)
+        favorites_manage_layout.addWidget(rename_folder_button)
 
         favorites_layout.addLayout(favorites_manage_layout)
 
@@ -1111,9 +1657,6 @@ class Hanime1GUI(QMainWindow):
         # 视频信息字段
         self.title_label = QLabel("-")
         self.title_label.setWordWrap(True)
-        self.chinese_title_label = QLabel("-")
-        self.chinese_title_label.setWordWrap(True)
-        self.views_label = QLabel("-")
         self.upload_date_label = QLabel("-")
         self.likes_label = QLabel("-")
         self.tags_label = QLabel("-")
@@ -1127,8 +1670,6 @@ class Hanime1GUI(QMainWindow):
         self.view_cover_button.setEnabled(False)
 
         self.info_form.addRow(QLabel("标题:"), self.title_label)
-        self.info_form.addRow(QLabel("中文标题:"), self.chinese_title_label)
-        self.info_form.addRow(QLabel("观看次数:"), self.views_label)
         self.info_form.addRow(QLabel("上传日期:"), self.upload_date_label)
         self.info_form.addRow(QLabel("点赞:"), self.likes_label)
         self.info_form.addRow(QLabel("标签:"), self.tags_label)
@@ -1151,6 +1692,9 @@ class Hanime1GUI(QMainWindow):
         self.related_list.setMinimumHeight(150)
         self.related_list.setMaximumHeight(200)
         self.related_list.itemClicked.connect(self.on_related_video_clicked)
+        self.related_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.related_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.related_list.customContextMenuRequested.connect(self.show_related_video_context_menu)
         related_layout.addWidget(self.related_list)
         parent_layout.addWidget(related_group)
 
@@ -1286,11 +1830,36 @@ class Hanime1GUI(QMainWindow):
 
     def on_page_changed(self, page):
         """页码变化处理"""
-        self.search_videos()
+        self.search_videos(page=page)
 
-    def search_videos(self):
+    def _update_search_history_ui(self):
+        """更新搜索历史下拉框"""
+        self.search_input.clear()
+        history = self.settings.get('search_history', [])
+        self.search_input.addItems(history)
+        self.search_input.setCurrentText("")
+
+    def _add_search_history(self, keyword):
+        """添加关键词到历史记录"""
+        if not keyword:
+            return
+        history = self.settings.get('search_history', [])
+        if keyword in history:
+            history.remove(keyword)
+        history.insert(0, keyword)
+        # 最多保留 10 条记录
+        self.settings['search_history'] = history[:10]
+        self.save_settings()
+        self._update_search_history_ui()
+        self.search_input.setCurrentText(keyword)
+
+    def search_videos(self, page=None):
         """根据关键词搜索视频"""
-        keyword = self.search_input.text().strip()
+        # 如果是按钮点击触发，page 会是 bool 值，需要重置为 None
+        if not isinstance(page, int):
+            page = None
+
+        keyword = self.search_input.currentText().strip()
         if not keyword:
             return
 
@@ -1311,19 +1880,27 @@ class Hanime1GUI(QMainWindow):
             return
 
         # 正常搜索流程
-        page = self.page_navigation.current_page
+        if page is None:
+            # 只有在新搜索（非翻页）时才记录历史
+            self._add_search_history(keyword)
+            page = 1
+            # 重置页码导航到第一页，但不触发信号，避免循环调用
+            self.page_navigation.blockSignals(True)
+            self.page_navigation.set_total_pages(1)
+            self.page_navigation.set_current_page(1)
+            self.page_navigation.blockSignals(False)
 
-        self.statusBar().showMessage(f"正在搜索: {keyword}...")
+        self.statusBar().showMessage(f"正在搜索: {keyword} (第 {page} 页)...")
 
         worker = SearchWorker(
             api=self.api,
             query=keyword,
-            page=page
+            page=page,
+            filter_params=self.filter_params
         )
 
         worker.signals.result.connect(self.on_search_complete)
         worker.signals.error.connect(self.on_search_error)
-        worker.signals.finished.connect(self.on_search_finished)
 
         self.threadpool.start(worker)
 
@@ -1348,26 +1925,31 @@ class Hanime1GUI(QMainWindow):
 
     def on_search_error(self, error):
         """搜索错误回调"""
-        self.statusBar().showMessage(f"搜索出错: {error}")
-
-    def on_search_finished(self):
-        """搜索结束回调"""
+        error_msg = str(error)
+        if "Cloudflare" in error_msg:
+            QMessageBox.warning(self, "搜索失败", "检测到 Cloudflare 验证拦截。\n\n请前往“设置”手动更新 Cloudflare Cookie。")
+        elif "certifi" in error_msg.lower() or "ssl" in error_msg.lower():
+            QMessageBox.critical(self, "网络错误", f"SSL 证书验证失败。这通常是由于打包环境缺失证书导致的。\n\n错误详情: {error_msg}")
+        elif "zhconv" in error_msg.lower():
+            QMessageBox.critical(self, "程序错误", f"繁简转换库 (zhconv) 运行出错。这通常是由于打包时缺失数据文件导致的。\n\n错误详情: {error_msg}")
+        else:
+            QMessageBox.warning(self, "搜索出错", f"发生未知错误: {error_msg}")
+        
+        self.statusBar().showMessage(f"搜索出错: {error_msg}")
 
     def on_video_selected(self, item):
         """视频选择回调"""
         index = self.video_list.row(item)
         if 0 <= index < len(self.current_search_results):
             video = self.current_search_results[index]
-            self.get_video_info(video['video_id'])
+            self.get_video_info(video['video_id'], video['title'])
 
-    def get_video_info(self, video_id):
+    def get_video_info(self, video_id, search_title=None):
         """获取视频信息"""
         self.statusBar().showMessage(f"正在获取视频 {video_id} 的信息...")
 
         # 清空显示
         self.title_label.setText("加载中...")
-        self.chinese_title_label.setText("加载中...")
-        self.views_label.setText("加载中...")
         self.upload_date_label.setText("加载中...")
         self.likes_label.setText("加载中...")
         self.tags_label.setText("加载中...")
@@ -1378,20 +1960,20 @@ class Hanime1GUI(QMainWindow):
         self.update_source_links([])
 
         worker = GetVideoInfoWorker(self.api, video_id)
-        worker.signals.result.connect(lambda result: self.on_video_info_complete(result, video_id))
+        worker.signals.result.connect(lambda result: self.on_video_info_complete(result, video_id, search_title))
         worker.signals.error.connect(lambda error: self.on_video_info_error(error, video_id))
-        worker.signals.finished.connect(self.on_video_info_finished)
 
         self.threadpool.start(worker)
 
-    def on_video_info_complete(self, video_info, video_id):
+    def on_video_info_complete(self, video_info, video_id, search_title=None):
         """视频信息获取完成回调"""
         if video_info:
+            # 如果有搜索结果中的标题，使用它覆盖video_info中的标题
+            if search_title:
+                video_info['title'] = search_title
             self.current_video_info = video_info
 
             self.title_label.setText(video_info['title'])
-            self.chinese_title_label.setText(video_info['chinese_title'])
-            self.views_label.setText(video_info['views'])
             self.upload_date_label.setText(video_info['upload_date'])
             self.likes_label.setText(video_info['likes'])
             self.tags_label.setText(", ".join(video_info['tags']))
@@ -1407,7 +1989,7 @@ class Hanime1GUI(QMainWindow):
 
             for i, related in enumerate(video_info['series']):
                 related_id = related.get('video_id', '')
-                title = related.get('chinese_title', related.get('title', f"视频 {related_id}"))
+                title = related.get('title', f"视频 {related_id}")
                 self.related_list.addItem(f"[{related_id}] {title}")
 
                 # 检查是否是当前视频
@@ -1442,9 +2024,6 @@ class Hanime1GUI(QMainWindow):
     def on_video_info_error(self, error, video_id):
         """视频信息获取错误回调"""
         self.statusBar().showMessage(f"获取视频 {video_id} 信息出错: {error}")
-
-    def on_video_info_finished(self):
-        """视频信息获取结束回调"""
 
     def update_source_links(self, video_sources):
         """更新视频源链接显示"""
@@ -1590,10 +2169,21 @@ class Hanime1GUI(QMainWindow):
                 else:
                     num_threads = 1
 
+                # 获取 API 的请求头和 Cookie
+                headers = self.api.session.headers
+                cookies = self.api.session.cookies.get_dict()
+
                 # 保存当前任务的唯一标识符（视频ID）
                 video_id = download['video_id']
 
-                worker = DownloadWorker(download['url'], filename, save_path=download_path, num_threads=num_threads)
+                worker = DownloadWorker(
+                    download['url'], 
+                    filename, 
+                    save_path=download_path, 
+                    num_threads=num_threads,
+                    headers=headers,
+                    cookies=cookies
+                )
 
                 # 为worker添加视频ID属性，用于标识
                 worker.video_id = video_id
@@ -1614,18 +2204,7 @@ class Hanime1GUI(QMainWindow):
 
                 self.statusBar().showMessage(f"开始下载视频 {download['title'][:20]}...")
 
-    def on_download_progress(self, progress_info, index):
-        """下载进度回调，更新单个任务进度并计算整体进度"""
-        if 0 <= index < len(self.downloads):
-            self.downloads[index]['progress'] = progress_info['progress']
-            self.downloads[index]['size'] = progress_info['size']
-            self.downloads[index]['total_size'] = progress_info['total_size']
-
-            # 更新下载列表中的进度显示
-            self.update_download_list()
-
-            # 计算整体进度
-            self.calculate_and_update_overall_progress()
+    
 
     def on_download_progress_by_id(self, progress_info, video_id):
         """根据视频ID更新下载进度"""
@@ -1677,44 +2256,7 @@ class Hanime1GUI(QMainWindow):
                 self.download_progress.setValue(0)
                 self.download_info.setText("准备下载")
 
-    def on_download_finished(self, index):
-        """下载完成回调"""
-        if 0 <= index < len(self.downloads):
-            download = self.downloads[index]
-            video_id = download.get('video_id')
-
-            # 从活动下载中移除
-            if video_id in self.active_downloads:
-                del self.active_downloads[video_id]
-
-            # 添加到下载历史
-            history_item = {
-                'video_id': download['video_id'],
-                'title': download['title'],
-                'filename': download.get('filename', f"video_{download['video_id']}.mp4"),
-                'download_date': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            self.download_history.append(history_item)
-            self.save_download_history()
-            self.update_history_list()
-
-            # 显示状态栏消息
-            self.statusBar().showMessage(f"视频 {download['title'][:20]}... 下载完成")
-
-            # 从下载队列中移除已完成的视频
-            del self.downloads[index]
-
-            # 更新下载列表显示
-            self.update_download_list()
-
-            # 重新计算整体进度
-            self.calculate_and_update_overall_progress()
-
-            # 检查是否还有待下载的视频，如果有，自动开始下载下一个，保持最大同时下载数
-            self.on_start_download()
-
-            # 检查是否有等待重试的任务
-            self.check_and_retry_failed_downloads()
+    
 
     def on_download_finished_by_id(self, video_id):
         """根据视频ID处理下载完成"""
@@ -1758,24 +2300,7 @@ class Hanime1GUI(QMainWindow):
             # 检查是否还有待下载的视频，如果有，自动开始下载下一个，保持最大同时下载数
             self.on_start_download()
 
-    def on_download_error(self, error, index):
-        """下载错误回调，更新进度显示"""
-        if 0 <= index < len(self.downloads):
-            self.downloads[index]['status'] = 'error'
-            self.downloads[index]['error'] = str(error)
-
-            # 从活动下载中移除
-            video_id = self.downloads[index].get('video_id')
-            if video_id in self.active_downloads:
-                del self.active_downloads[video_id]
-
-            # 更新下载列表显示
-            self.update_download_list()
-
-            # 重新计算整体进度
-            self.calculate_and_update_overall_progress()
-
-            self.statusBar().showMessage(f"视频下载出错: {error}")
+    
 
     def on_download_error_by_id(self, error, video_id):
         """根据视频ID处理下载错误"""
@@ -1918,19 +2443,32 @@ class Hanime1GUI(QMainWindow):
             worker.signals.result.connect(lambda video_info, idx=i: self.on_video_info_for_retry(video_info, idx))
             self.threadpool.start(worker)
 
+    def _get_video_source_by_quality(self, video_sources):
+        """根据用户设置的质量选择视频源
+
+        参数:
+            video_sources: 视频源列表
+
+        返回:
+            选中的视频源
+        """
+        # 根据用户设置选择画质
+        download_quality = self.settings.get('download_quality', '最高')
+
+        if download_quality == '最高':
+            # 选择质量最高的源进行下载
+            source = video_sources[0]
+        else:
+            # 选择质量最低的源进行下载
+            source = video_sources[-1]
+
+        return source
+
     def on_video_info_for_retry(self, video_info, index):
         """获取视频信息用于重试下载"""
         if video_info and video_info['video_sources']:
-            # 根据用户设置选择画质
-            download_quality = self.settings.get('download_quality', '最高')
-            video_sources = video_info['video_sources']
-
-            if download_quality == '最高':
-                # 选择质量最高的源进行下载
-                source = video_sources[0]
-            else:
-                # 选择质量最低的源进行下载
-                source = video_sources[-1]
+            # 选择视频源
+            source = self._get_video_source_by_quality(video_info['video_sources'])
 
             # 更新下载任务的URL
             self.downloads[index]['url'] = source['url']
@@ -2006,6 +2544,26 @@ class Hanime1GUI(QMainWindow):
 
         menu.exec_(self.video_list.viewport().mapToGlobal(position))
 
+    def show_related_video_context_menu(self, position):
+        """相关视频列表右键菜单"""
+        selected_items = self.related_list.selectedItems()
+        if not selected_items:
+            return
+
+        menu = QMenu()
+
+        # 下载选项
+        download_action = QAction("下载", self)
+        download_action.triggered.connect(lambda: self.on_download_from_menu(selected_items))
+        menu.addAction(download_action)
+
+        # 添加到收藏夹选项
+        add_favorite_action = QAction("添加到收藏夹", self)
+        add_favorite_action.triggered.connect(lambda: self.on_add_to_favorites_from_menu(selected_items))
+        menu.addAction(add_favorite_action)
+
+        menu.exec_(self.related_list.viewport().mapToGlobal(position))
+
     def on_download_from_menu(self, items):
         """从菜单下载"""
         for item in items:
@@ -2020,17 +2578,8 @@ class Hanime1GUI(QMainWindow):
     def on_video_info_for_download(self, video_info):
         """获取视频信息用于下载"""
         if video_info and video_info['video_sources']:
-            # 根据用户设置选择画质
-            download_quality = self.settings.get('download_quality', '最高')
-            video_sources = video_info['video_sources']
-
-            if download_quality == '最高':
-                # 选择质量最高的源进行下载
-                # 假设video_sources列表已经按质量从高到低排序
-                source = video_sources[0]
-            else:
-                # 选择质量最低的源进行下载
-                source = video_sources[-1]
+            # 选择视频源
+            source = self._get_video_source_by_quality(video_info['video_sources'])
 
             self.add_to_download_queue(video_info, source)
 
@@ -2101,6 +2650,9 @@ class Hanime1GUI(QMainWindow):
     def update_folder_combobox(self):
         """更新收藏夹下拉框"""
         current_folder = self.folder_combobox.currentText()
+        
+        # 暂时阻塞信号，避免 clear() 触发 currentTextChanged 导致创建空白收藏夹
+        self.folder_combobox.blockSignals(True)
         self.folder_combobox.clear()
 
         # 显示所有收藏夹
@@ -2114,6 +2666,8 @@ class Hanime1GUI(QMainWindow):
             # 默认选择第一个收藏夹
             self.folder_combobox.setCurrentIndex(0)
             self.current_favorite_folder = self.folder_combobox.currentText()
+        
+        self.folder_combobox.blockSignals(False)
 
         # 更新收藏夹列表
         self.update_favorites_list()
@@ -2124,12 +2678,13 @@ class Hanime1GUI(QMainWindow):
         Args:
             folder_name: 选中的收藏夹名称
         """
+        if not folder_name:
+            return
         self.current_favorite_folder = folder_name
         self.update_favorites_list()
 
     def on_new_folder(self):
         """新建收藏夹"""
-        from PyQt5.QtWidgets import QInputDialog
 
         # 弹出输入对话框让用户输入新收藏夹名称
         folder_name, ok = QInputDialog.getText(self, "新建收藏夹", "请输入收藏夹名称:")
@@ -2156,7 +2711,6 @@ class Hanime1GUI(QMainWindow):
 
     def on_delete_folder(self):
         """删除收藏夹"""
-        from PyQt5.QtWidgets import QMessageBox
 
         current_folder = self.folder_combobox.currentText()
 
@@ -2183,6 +2737,30 @@ class Hanime1GUI(QMainWindow):
 
                 self.statusBar().showMessage(f"已删除收藏夹 '{current_folder}'")
 
+    def on_rename_folder(self):
+        """重命名收藏夹"""
+        current_folder = self.folder_combobox.currentText()
+        if not current_folder:
+            return
+
+        new_name, ok = QInputDialog.getText(self, "重命名收藏夹", f"将 '{current_folder}' 重命名为:", QLineEdit.Normal, current_folder)
+        
+        if ok and new_name.strip() and new_name.strip() != current_folder:
+            new_name = new_name.strip()
+            
+            if new_name in self.favorites:
+                QMessageBox.warning(self, "提示", f"收藏夹 '{new_name}' 已存在")
+                return
+            
+            # 执行重命名逻辑
+            self.favorites[new_name] = self.favorites.pop(current_folder)
+            self.save_favorites()
+            
+            # 更新 UI
+            self.update_folder_combobox()
+            self.folder_combobox.setCurrentText(new_name)
+            self.statusBar().showMessage(f"已将收藏夹重命名为 '{new_name}'")
+
     def on_favorites_search(self, text):
         """收藏夹搜索功能
 
@@ -2201,23 +2779,35 @@ class Hanime1GUI(QMainWindow):
             filtered = [
                 favorite for favorite in self._original_favorites
                 if search_text in favorite['title'].lower() or
-                   search_text in favorite.get('chinese_title', '').lower() or
                    search_text in favorite.get('video_id', '')
             ]
             self._refresh_favorites_list(filtered)
 
     def on_export_favorites(self):
-        """导出当前选中的收藏夹"""
-        # 获取当前选中的收藏夹
-        current_folder = self.folder_combobox.currentText()
-
-        # 如果没有选中收藏夹或收藏夹为空，显示提示
-        if not current_folder or current_folder not in self.favorites:
-            QMessageBox.warning(self, "提示", "请先选择一个有效的收藏夹")
+        """导出收藏夹"""
+        # 弹出菜单让用户选择导出当前还是全部
+        menu = QMenu(self)
+        export_current_action = menu.addAction("导出当前选中的收藏夹")
+        export_all_action = menu.addAction("导出全部收藏夹")
+        
+        # 获取按钮位置并在下方弹出菜单
+        button = self.sender()
+        action = menu.exec_(button.mapToGlobal(button.rect().bottomLeft()))
+        
+        if not action:
             return
 
-        # 设置默认文件名
-        default_filename = f"{current_folder}.json"
+        current_folder = self.folder_combobox.currentText()
+        
+        if action == export_current_action:
+            if not current_folder or current_folder not in self.favorites:
+                QMessageBox.warning(self, "提示", "请先选择一个有效的收藏夹")
+                return
+            default_filename = f"{current_folder}.json"
+            export_data = {current_folder: self.favorites[current_folder]}
+        else:
+            default_filename = "all_favorites.json"
+            export_data = self.favorites
 
         file_path, _ = QFileDialog.getSaveFileName(
             self, "导出收藏夹", default_filename, "JSON Files (*.json)"
@@ -2225,11 +2815,9 @@ class Hanime1GUI(QMainWindow):
 
         if file_path:
             try:
-                # 只导出当前选中的收藏夹
-                export_data = {current_folder: self.favorites[current_folder]}
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(export_data, f, ensure_ascii=False, indent=2)
-                self.statusBar().showMessage(f"收藏夹 '{current_folder}' 已导出到 {file_path}")
+                self.statusBar().showMessage(f"收藏夹已导出到 {file_path}")
             except Exception as e:
                 self.statusBar().showMessage(f"导出收藏夹失败: {str(e)}")
 
@@ -2361,7 +2949,6 @@ class Hanime1GUI(QMainWindow):
         favorite_item = {
             'video_id': video_info['video_id'],
             'title': video_info['title'],
-            'chinese_title': video_info.get('chinese_title', ''),
             'thumbnail': video_info.get('thumbnail', ''),
             'url': video_info['url']
         }
@@ -2452,7 +3039,6 @@ class Hanime1GUI(QMainWindow):
                 favorite_item = {
                     'video_id': video_id,
                     'title': title,
-                    'chinese_title': '',
                     'thumbnail': '',
                     'url': f"https://hanime1.me/watch?v={video_id}"
                 }
@@ -2622,6 +3208,47 @@ class Hanime1GUI(QMainWindow):
         # 调用父类的closeEvent方法
         super().closeEvent(event)
 
+    def apply_cloudflare_cookie(self, cookie_text):
+        """应用 Cloudflare Cookie 到 API 实例
+        
+        Args:
+            cookie_text: Cookie 文本
+        """
+        if not cookie_text:
+            return
+
+        try:
+            # 清除现有 Cookie
+            self.api.session.cookies.clear()
+
+            # 添加新 Cookie
+            if cookie_text.startswith('cf_clearance='):
+                # 直接是 cf_clearance=value 格式
+                cf_clearance = cookie_text.split('=', 1)[1]
+                self.api.session.cookies.set('cf_clearance', cf_clearance, domain='.hanime1.me', path='/')
+            else:
+                # 尝试解析完整的 Cookie 字符串
+                cookies = cookie_text.split(';')
+                for cookie in cookies:
+                    cookie = cookie.strip()
+                    if '=' in cookie:
+                        name, value = cookie.split('=', 1)
+                        # 为所有 Cookie 设置正确的 domain 和 path
+                        self.api.session.cookies.set(name, value, domain='.hanime1.me', path='/')
+
+            # 保存会话
+            self.api.save_session()
+        except Exception as e:
+            print(f"应用 Cookie 失败: {str(e)}")
+
+    def open_filter_dialog(self):
+        """打开筛选对话框"""
+        dialog = FilterDialog(self.filter_params, self)
+        if dialog.exec_():
+            new_filter_params = dialog.get_filter_params()
+            self.filter_params = new_filter_params
+            self.statusBar().showMessage("筛选设置已保存")
+
     def open_settings(self):
         """打开设置对话框"""
         dialog = SettingsDialog(self.settings, self)
@@ -2638,36 +3265,12 @@ class Hanime1GUI(QMainWindow):
 
             # 如果Cloudflare Cookie有变化，应用到API实例
             if old_cookie != new_cookie:
-                # 清除现有Cookie（包括所有domain的Cookie）
-                self.api.session.cookies.clear()
-
                 if new_cookie:
-                    # 应用新Cookie
-                    if new_cookie.startswith('cf_clearance='):
-                        # 直接是cf_clearance=value格式
-                        cf_clearance = new_cookie.split('=', 1)[1]
-                        # 确保设置正确的domain和path
-                        self.api.session.cookies.set('cf_clearance', cf_clearance, domain='.hanime1.me', path='/')
-                    else:
-                        # 尝试解析完整的Cookie字符串
-                        cookies = new_cookie.split(';')
-                        for cookie in cookies:
-                            cookie = cookie.strip()
-                            if '=' in cookie:
-                                name, value = cookie.split('=', 1)
-                                # 为所有Cookie设置正确的domain和path
-                                if name in ['cf_clearance', 'XSRF-TOKEN', 'hanime1_session', 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d']:
-                                    self.api.session.cookies.set(name, value, domain='.hanime1.me', path='/')
-                                else:
-                                    # 其他Cookie也添加到会话中
-                                    self.api.session.cookies.set(name, value, domain='.hanime1.me', path='/')
-                    # 保存会话到settings.json
-                    self.api.save_session()
-                    # 显示当前Cookie状态
-                    print(f"已应用Cookie: cf_clearance={'***' + cf_clearance[-10:] if 'cf_clearance' in locals() else '未找到'}")
-                    print(f"当前会话Cookie: {dict(self.api.session.cookies)}")
+                    self.apply_cloudflare_cookie(new_cookie)
                     self.statusBar().showMessage("设置已保存，Cloudflare Cookie已应用")
                 else:
+                    # 清除现有Cookie
+                    self.api.session.cookies.clear()
                     # 从settings.json中移除session信息
                     if os.path.exists('settings.json'):
                         with open('settings.json', 'r', encoding='utf-8') as f:
@@ -2712,7 +3315,7 @@ class Hanime1GUI(QMainWindow):
 
     def clear_download_history(self):
         """清空下载历史"""
-        from PyQt5.QtWidgets import QMessageBox
+
 
         reply = QMessageBox.question(self, "确认清空", "确定要清空所有下载历史吗？此操作不可恢复。",
                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -2742,8 +3345,7 @@ class Hanime1GUI(QMainWindow):
         """查看历史视频信息"""
         for item in items:
             text = item.text()
-            import re
-            match = re.search(r'\[(\d+)]', text)
+            match = re.search(r'\[(\d+)\]', text)
             if match:
                 video_id = match.group(1)
                 self.get_video_info(video_id)
@@ -2877,10 +3479,11 @@ class Hanime1GUI(QMainWindow):
     def on_related_video_clicked(self, item):
         """点击相关视频"""
         text = item.text()
-        match = re.search(r'\[(\d+)]', text)
+        match = re.search(r'\[(\d+)]\s*(.+)', text)
         if match:
             video_id = match.group(1)
-            self.get_video_info(video_id)
+            title = match.group(2)
+            self.get_video_info(video_id, title)
 
 
 def main():
@@ -2890,4 +3493,6 @@ def main():
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
+    # 处理 multiprocessing 在打包后的问题
+    multiprocessing.freeze_support()
     main()
