@@ -1,5 +1,5 @@
 """
-Dialogs for Hanime1VideoTool
+Dialogs for Hanime1DL
 """
 
 import json

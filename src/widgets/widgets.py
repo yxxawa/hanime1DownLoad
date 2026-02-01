@@ -1,5 +1,5 @@
 """
-Custom widgets for Hanime1VideoTool
+Custom widgets for Hanime1DL
 """
 
 from PyQt5.QtCore import QMimeData, Qt, pyqtSignal

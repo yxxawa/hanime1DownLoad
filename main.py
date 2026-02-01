@@ -1,5 +1,5 @@
 """
-Entry point for Hanime1VideoTool
+Entry point for Hanime1DL
 """
 
 import multiprocessing

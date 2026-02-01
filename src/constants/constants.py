@@ -1,5 +1,5 @@
 """
-Constants for Hanime1VideoTool
+Constants for Hanime1DL
 """
 
 # 繁体中文到简体中文的映射表

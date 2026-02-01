@@ -1,5 +1,5 @@
 """
-Main GUI window for Hanime1VideoTool
+Main GUI window for Hanime1DL
 """
 
 import ctypes
@@ -1127,7 +1127,7 @@ class Hanime1GUI(QMainWindow):
             base_label = label_map[download["status"]]
             if download["status"] == "downloading":
                 base_label = f"{base_label} {int(download.get('progress', 0))}%"
-            text = f"[{base_label}] [{download['video_id']}] {download['title'][:30]}..."
+            text = f"[{base_label}] [{download['video_id']}] {download['title'][:30]}"
             self.download_list.addItem(text)
 
         # 更新切换按钮文本: 开始 -> 暂停 -> 继续 -> 开始
@@ -1816,14 +1816,19 @@ class Hanime1GUI(QMainWindow):
 
     def on_download_from_menu(self, items):
         for item in items:
-            match = re.search(r"\[(\d+)]", item.text())
+            match = re.search(r"\[(\d+)\]\s*(.+)", item.text())
             if match:
-                worker = GetVideoInfoWorker(self.api, match.group(1), None)  # 菜单下载需要完整信息
-                worker.signals.result.connect(self.on_video_info_for_download)
+                video_id = match.group(1)
+                list_title = match.group(2)
+                worker = GetVideoInfoWorker(self.api, video_id, None)  # 菜单下载需要完整信息
+                worker.signals.result.connect(lambda result, title=list_title: self.on_video_info_for_download(result, title))
                 self.threadpool.start(worker, priority=20)
 
-    def on_video_info_for_download(self, video_info):
+    def on_video_info_for_download(self, video_info, list_title=None):
         if video_info and video_info["video_sources"]:
+            # 使用列表中的标题而不是详细信息的标题
+            if list_title:
+                video_info["title"] = list_title
             quality = self.settings.get("download_quality", "最高")
             source = (
                 video_info["video_sources"][0]

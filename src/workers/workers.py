@@ -1,5 +1,5 @@
 """
-Worker classes for background tasks in Hanime1VideoTool
+Worker classes for background tasks in Hanime1DL
 """
 
 import concurrent.futures
