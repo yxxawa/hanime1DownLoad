@@ -2080,24 +2080,29 @@ class Hanime1GUI(QMainWindow):
                 self.threadpool.start(worker, priority=20)
 
     def show_download_context_menu(self, pos):
-        item = self.download_list.itemAt(pos)
-        if item:
-            idx = self.download_list.row(item)
-            download = self.downloads[idx]
+        selected_items = self.download_list.selectedItems()
+        if selected_items:
             menu = QMenu(self)
 
-            if download["status"] == "downloading":
-                menu.addAction("暂停").triggered.connect(
-                    lambda: self.on_pause_download_from_menu(item)
-                )
-            elif download["status"] in ["pending", "paused"]:
-                menu.addAction("开始/恢复").triggered.connect(lambda: self.start_download(idx))
+            # 检查是否有正在下载的项
+            has_downloading = any(self.downloads[self.download_list.row(item)]["status"] == "downloading" for item in selected_items)
+            # 检查是否有可开始/恢复的项
+            has_startable = any(self.downloads[self.download_list.row(item)]["status"] in ["pending", "paused"] for item in selected_items)
 
-            menu.addAction("取消").triggered.connect(
-                lambda: self.on_cancel_download_from_menu(item)
+            if has_downloading:
+                menu.addAction("暂停选中项").triggered.connect(
+                    lambda: self.on_pause_selected_downloads(selected_items)
+                )
+            if has_startable:
+                menu.addAction("开始/恢复选中项").triggered.connect(
+                    lambda: self.on_start_selected_downloads(selected_items)
+                )
+
+            menu.addAction("取消选中项").triggered.connect(
+                lambda: self.on_cancel_selected_downloads(selected_items)
             )
-            menu.addAction("移除").triggered.connect(
-                lambda: self.on_remove_from_download_queue(item)
+            menu.addAction("移除选中项").triggered.connect(
+                lambda: self.on_remove_selected_downloads(selected_items)
             )
             menu.exec_(self.download_list.viewport().mapToGlobal(pos))
 
@@ -2136,6 +2141,52 @@ class Hanime1GUI(QMainWindow):
             self.active_downloads[vid].cancel()
             del self.active_downloads[vid]
         self.downloads.pop(idx)
+        self.update_download_list()
+
+    def on_pause_selected_downloads(self, items):
+        for item in items:
+            idx = self.download_list.row(item)
+            if 0 <= idx < len(self.downloads):
+                download = self.downloads[idx]
+                if download["status"] == "downloading":
+                    vid = download["video_id"]
+                    if vid in self.active_downloads:
+                        self.active_downloads[vid].pause()
+                        download["status"] = "paused"
+        self.update_download_list()
+
+    def on_start_selected_downloads(self, items):
+        for item in items:
+            idx = self.download_list.row(item)
+            if 0 <= idx < len(self.downloads):
+                download = self.downloads[idx]
+                if download["status"] in ["pending", "paused"]:
+                    self.start_download(idx)
+
+    def on_cancel_selected_downloads(self, items):
+        # 按索引从大到小排序，避免删除时索引变化
+        indices = sorted([self.download_list.row(item) for item in items], reverse=True)
+        for idx in indices:
+            if 0 <= idx < len(self.downloads):
+                download = self.downloads[idx]
+                vid = download["video_id"]
+                if vid in self.active_downloads:
+                    self.active_downloads[vid].cancel()
+                    del self.active_downloads[vid]
+                download["status"] = "cancelled"
+                self._delete_video_files_async(download)
+        self.update_download_list()
+
+    def on_remove_selected_downloads(self, items):
+        # 按索引从大到小排序，避免删除时索引变化
+        indices = sorted([self.download_list.row(item) for item in items], reverse=True)
+        for idx in indices:
+            if 0 <= idx < len(self.downloads):
+                vid = self.downloads[idx]["video_id"]
+                if vid in self.active_downloads:
+                    self.active_downloads[vid].cancel()
+                    del self.active_downloads[vid]
+                self.downloads.pop(idx)
         self.update_download_list()
 
     def load_download_history(self):
