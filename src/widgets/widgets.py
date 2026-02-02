@@ -2,7 +2,7 @@
 Custom widgets for Hanime1DL
 """
 
-from PyQt5.QtCore import QMimeData, Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -10,7 +10,6 @@ from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QListWidget,
     QMenu,
@@ -41,23 +40,23 @@ class PageNavigationWidget(QWidget):
     def init_ui(self):
         # 使用垂直布局，避免元素重叠
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(2)
+        self.layout.setContentsMargins(0, 8, 0, 8)
+        self.layout.setSpacing(4)
 
         # 水平布局用于按钮
         buttons_layout = QHBoxLayout()
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(5)
+        buttons_layout.setSpacing(8)
 
         # 第一页按钮
         self.first_button = QPushButton("首页")
-        self.first_button.setFixedSize(70, 30)
+        self.first_button.setFixedSize(70, 36)
         self.first_button.clicked.connect(self.go_to_first_page)
         buttons_layout.addWidget(self.first_button)
 
         # 上一页按钮
         self.prev_button = QPushButton("上一页")
-        self.prev_button.setFixedSize(80, 30)
+        self.prev_button.setFixedSize(80, 36)
         self.prev_button.clicked.connect(self.go_to_prev_page)
         buttons_layout.addWidget(self.prev_button)
 
@@ -75,23 +74,18 @@ class PageNavigationWidget(QWidget):
 
         # 下一页按钮
         self.next_button = QPushButton("下一页")
-        self.next_button.setFixedSize(80, 30)
+        self.next_button.setFixedSize(80, 36)
         self.next_button.clicked.connect(self.go_to_next_page)
         buttons_layout.addWidget(self.next_button)
 
         # 最后一页按钮
         self.last_button = QPushButton("末页")
-        self.last_button.setFixedSize(70, 30)
+        self.last_button.setFixedSize(70, 36)
         self.last_button.clicked.connect(self.go_to_last_page)
         buttons_layout.addWidget(self.last_button)
 
         # 添加按钮布局到主布局
         self.layout.addLayout(buttons_layout)
-
-        # 页码信息，单独一行显示
-        self.page_info = QLabel("第 1 页 / 共 1 页")
-        self.page_info.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(self.page_info)
 
         # 初始化状态
         self.update_buttons()
@@ -121,11 +115,12 @@ class PageNavigationWidget(QWidget):
         self.next_button.setEnabled(self.current_page < self.total_pages)
         self.last_button.setEnabled(self.current_page < self.total_pages)
 
-        # 更新页码信息
-        self.page_info.setText(f"第 {self.current_page} 页 / 共 {self.total_pages} 页")
-
         # 更新页码按钮
         self.update_page_buttons()
+        
+    def get_page_info_text(self):
+        """获取页码信息文本"""
+        return f"第 {self.current_page} 页 / 共 {self.total_pages} 页"
 
     def update_page_buttons(self):
         """更新页码按钮"""
@@ -134,6 +129,11 @@ class PageNavigationWidget(QWidget):
             widget = self.pages_layout.itemAt(i).widget()
             if widget:
                 widget.deleteLater()
+        # 清空所有间隔项
+        for i in reversed(range(self.pages_layout.count())):
+            item = self.pages_layout.itemAt(i)
+            if isinstance(item, QSpacerItem):
+                self.pages_layout.removeItem(item)
 
         # 计算显示的页码范围
         start_page = max(1, self.current_page - self.max_visible_pages // 2)
@@ -144,29 +144,21 @@ class PageNavigationWidget(QWidget):
             start_page = max(1, end_page - self.max_visible_pages + 1)
 
         # 按顺序添加页码按钮
-        first = True
         for page in range(start_page, end_page + 1):
             button = QPushButton(str(page))
-            button.setFixedHeight(30)
-            button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-            fm = button.fontMetrics()
-            min_w = fm.horizontalAdvance(str(page)) + 20
-            button.setMinimumWidth(min_w)
+            # 确保页码按钮与导航按钮高度完全一致
+            button.setFixedSize(50, 36)
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            # 确保页码按钮与导航按钮样式完全一致
             if page == self.current_page:
-                button.setStyleSheet(
-                    "background-color: #1890ff; color: white; border: 1px solid #1890ff;"
-                )
+                button.setObjectName("primary_btn")
+                button.setStyleSheet("QPushButton#primary_btn { background-color: #1890ff; color: white; border: 1px solid #1890ff; border-radius: 8px; padding: 0 12px; font-family: 'Segoe UI'; font-size: 9pt; min-height: 36px; } QPushButton#primary_btn:pressed { background-color: #096dd9; border-color: #096dd9; }")
             else:
-                button.setStyleSheet(
-                    "background-color: white; color: #333; border: 1px solid #d9d9d9;"
-                )
+                button.setObjectName("")
+                # 设置普通页码按钮的样式，确保与导航按钮完全一致
+                button.setStyleSheet("QPushButton { background-color: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px; padding: 0 12px; color: #333; font-family: 'Segoe UI'; font-size: 9pt; min-height: 36px; } QPushButton:pressed { background-color: #e6e6e6; border-color: #1890ff; }")
             button.clicked.connect(lambda checked, p=page: self.set_current_page(p))
-            if not first:
-                self.pages_layout.addSpacerItem(
-                    QSpacerItem(0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
-                )
             self.pages_layout.addWidget(button)
-            first = False
 
     def go_to_first_page(self):
         """跳转到第一页"""

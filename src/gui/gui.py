@@ -2,8 +2,6 @@
 Main GUI window for Hanime1DL
 """
 
-import ctypes
-import datetime
 import json
 import multiprocessing
 import os
@@ -11,6 +9,7 @@ import re
 import shutil
 import threading
 import time
+import datetime
 
 import requests
 import sip
@@ -25,7 +24,7 @@ from PyQt5.QtCore import (
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -83,7 +82,8 @@ class Hanime1GUI(QMainWindow):
             "file_naming_rule": "{title}",
             "overwrite_existing": False,
             "cloudflare_cookie": "",
-            "window_size": {"width": 1320, "height": 1485},
+            "window_size": {"width": 1589, "height": 1415},
+            "window_pos": {"x": 520, "y": 91},
             "search_history": [],
             "show_thumbnails": False,
             "show_announcements": True,
@@ -154,32 +154,64 @@ class Hanime1GUI(QMainWindow):
         self._init_right_panel()
         self.statusBar()
 
+
+
     def _apply_global_styles(self):
         """应用全局 QSS 样式"""
+        # 设置全局字体
+        QApplication.setFont(QFont("Segoe UI", 9))
+        
+        # 直接使用相对路径，让Qt自动处理路径解析
         self.setStyleSheet("""
+            /* 全局基础样式 */
+            * {
+                font-family: 'Segoe UI';
+            }
+            
+            /* 窗口和面板样式 */
+            QMainWindow, QWidget, QDialog {
+                border-radius: 8px;
+            }
+            
+            /* 列表和滚动区域样式 */
             QListWidget, QTextEdit, QScrollArea {
-                border: 1px solid #ddd;
-                border-radius: 4px;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
                 background-color: white;
                 outline: none;
+                padding: 0;
+                margin: 0;
             }
+            QListWidget::viewport {
+                padding: 0;
+                margin: 0;
+            }
+            QListWidget {
+                margin-bottom: -4px;
+            }
+            QTextEdit, QScrollArea {
+                padding: 4px;
+            }
+            
             /* 修复滚动条交汇处的白块 */
             QAbstractScrollArea::corner {
                 background: transparent;
                 border: none;
             }
+            
             /* 现代感滚动条样式 */
             QScrollBar:vertical {
                 border: none;
                 background: #f5f5f5;
-                width: 10px;
-                margin: 0px;
+                width: 6px;
+                margin: 0;
+                border-radius: 3px;
             }
             QScrollBar::handle:vertical {
                 background: #ccc;
                 min-height: 20px;
-                border-radius: 5px;
-                margin: 2px;
+                border-radius: 3px;
+                margin: 0;
             }
             QScrollBar::handle:vertical:hover {
                 background: #aaa;
@@ -187,6 +219,7 @@ class Hanime1GUI(QMainWindow):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
             }
+            
             /* 横向滚动条隐藏逻辑优化 - 更加严格的显示控制 */
             QListWidget QScrollBar:horizontal, 
             QTextEdit QScrollBar:horizontal, 
@@ -198,25 +231,23 @@ class Hanime1GUI(QMainWindow):
                 max-height: 0px;
                 margin: 0px;
             }
-            QListWidget QScrollBar::handle:horizontal, 
-            QTextEdit QScrollBar::handle:horizontal, 
-            QScrollArea QScrollBar::handle:horizontal {
-                background: transparent;
-            }
             QListWidget:hover QScrollBar:horizontal, 
             QTextEdit:hover QScrollBar:horizontal, 
             QScrollArea:hover QScrollBar:horizontal {
-                height: 8px;
-                min-height: 8px;
-                max-height: 8px;
+                height: 6px;
+                min-height: 6px;
+                max-height: 6px;
                 background: #f5f5f5;
+                border-radius: 3px;
+                margin: 0;
             }
             QListWidget:hover QScrollBar::handle:horizontal, 
             QTextEdit:hover QScrollBar::handle:horizontal, 
             QScrollArea:hover QScrollBar::handle:horizontal {
                 background: #ccc;
                 min-width: 20px;
-                border-radius: 4px;
+                border-radius: 3px;
+                margin: 0;
             }
             QScrollBar::handle:horizontal:hover {
                 background: #aaa;
@@ -230,52 +261,65 @@ class Hanime1GUI(QMainWindow):
                 background: transparent;
             }
             
+            /* 列表项样式 */
             QListWidget::item {
                 border-bottom: 1px solid #f0f0f0;
                 padding: 10px;
                 color: #333;
+                border-radius: 6px;
+                margin: 1px;
             }
             QListWidget::item:selected {
-                background-color: transparent;
+                background-color: #e6f7ff;
                 color: #1890ff;
                 border-left: 4px solid #1890ff;
+                border-radius: 6px;
             }
             QListWidget::item:hover {
-                background-color: #fafafa;
+                background-color: #f5f9ff;
+                border-radius: 6px;
             }
+            
+            /* 分组框样式 */
             QGroupBox {
                 font-weight: bold;
-                border: 1px solid #ddd;
-                border-radius: 6px;
+                border: 1px solid #e0e0e0;
+                border-radius: 10px;
                 margin-top: 12px;
                 padding-top: 10px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
-                padding: 0 3px 0 3px;
-            }
-            QPushButton {
-                background-color: #f5f5f5;
-                border: 1px solid #d9d9d9;
+                padding: 0 6px 0 6px;
                 border-radius: 4px;
-                padding: 5px 15px;
+            }
+            
+            /* 按钮样式 */
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 8px 16px;
                 color: #333;
-                min-height: 20px;
+                min-height: 28px;
             }
             QPushButton:hover {
-                background-color: #e6e6e6;
+                background-color: #e6f7ff;
                 border-color: #1890ff;
                 color: #1890ff;
             }
             QPushButton:pressed {
-                background-color: #d9d9d9;
+                background-color: #e6e6e6;
+                border-color: #1890ff;
+                color: #1890ff;
             }
             QPushButton:disabled {
-                background-color: #f0f0f0;
+                background-color: #f5f5f5;
                 color: #bfbfbf;
-                border-color: #d9d9d9;
+                border-color: #e0e0e0;
             }
+            
             /* 主要操作按钮样式 */
             QPushButton#primary_btn {
                 background-color: #1890ff;
@@ -290,132 +334,141 @@ class Hanime1GUI(QMainWindow):
                 background-color: #096dd9;
                 border-color: #096dd9;
             }
-            QLineEdit, QSpinBox, QTextEdit {
-                border: 1px solid #d9d9d9;
-                border-radius: 4px;
-                padding: 4px;
+            
+            /* 输入控件样式 */
+            QLineEdit, QSpinBox, QTextEdit, QComboBox {
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 6px 10px;
                 background: white;
             }
-            QLineEdit:focus, QSpinBox:focus, QTextEdit:focus {
-                border-color: #40a9ff;
+            QLineEdit:focus, QSpinBox:focus, QTextEdit:focus, QComboBox:focus {
+                border-color: #1890ff;
             }
+            
             /* 美化右键菜单和下拉菜单 */
             QMenu {
                 background-color: #ffffff;
-                border: 1px solid #d9d9d9;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
                 padding: 4px 0px;
             }
             QMenu::item {
-                padding: 6px 30px 6px 20px;
-                border: 1px solid transparent; /* 预留边框空间 */
-                margin: 0px 2px;
+                padding: 8px 32px 8px 24px;
+                border: 1px solid transparent;
+                margin: 2px;
+                border-radius: 6px;
             }
             QMenu::item:selected {
                 background-color: #e6f7ff;
                 color: #1890ff;
-                border-radius: 3px;
+                border-radius: 6px;
             }
             QMenu::separator {
                 height: 1px;
                 background: #f0f0f0;
-                margin: 5px 10px;
+                margin: 4px 10px;
             }
             QMenu::icon {
                 margin-left: 10px;
             }
+            
+            /* 下拉框样式 */
             QComboBox {
-                border: 1px solid #d9d9d9;
-                border-radius: 4px;
-                padding: 4px 10px;
-                background: white;
-                min-height: 25px;
+                min-height: 28px;
             }
             QComboBox:hover {
-                border-color: #40a9ff;
-            }
-            QComboBox:focus {
-                border-color: #40a9ff;
+                border-color: #1890ff;
             }
             QComboBox::drop-down {
                 border: none;
                 width: 30px;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
             }
             QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid #999;
-                margin-top: 2px;
+                image: url(assets/open.png);
+                width: 16px;
+                height: 16px;
+                margin: 0;
             }
             QComboBox::down-arrow:hover {
-                border-top-color: #1890ff;
+                image: url(assets/open.png);
+            }
+            QComboBox::down-arrow:on {
+                image: url(assets/close.png);
             }
             QComboBox QAbstractItemView {
-                border: 1px solid #d9d9d9;
-                border-radius: 4px;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
                 background-color: white;
                 selection-background-color: #e6f7ff;
                 selection-color: #1890ff;
                 outline: none;
             }
             QComboBox QAbstractItemView::item {
-                min-height: 30px;
-                padding-left: 10px;
+                min-height: 32px;
+                padding-left: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #f5f9ff;
             }
             
+            /* 数字输入框样式 */
             QSpinBox::up-button, QSpinBox::down-button {
                 border: none;
-                background: #f5f5f5;
-                width: 16px;
+                background: #f8f9fa;
+                width: 20px;
+                border-radius: 4px;
             }
             QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-                background: #e6e6e6;
+                background: #e6f7ff;
             }
             QSpinBox::up-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-bottom: 4px solid #999;
+                image: url(assets/up.png);
+                width: 12px;
+                height: 12px;
             }
             QSpinBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 4px solid #999;
+                image: url(assets/down.png);
+                width: 12px;
+                height: 12px;
             }
             
             /* 美化进度条 */
             QProgressBar {
-                border: 1px solid #d9d9d9;
-                border-radius: 8px;
+                border: 1px solid #e0e0e0;
+                border-radius: 10px;
                 background-color: #f5f5f5;
-                height: 16px;
+                height: 20px;
                 text-align: center;
                 color: #333;
             }
             QProgressBar::chunk {
                 background-color: #1890ff;
-                border-radius: 7px;
+                border-radius: 9px;
                 margin: 1px;
             }
             QProgressBar::chunk:disabled {
                 background-color: #bfbfbf;
-                border-radius: 7px;
+                border-radius: 9px;
                 margin: 1px;
             }
             QProgressBar::chunk:completed {
                 background-color: #52c41a;
-                border-radius: 7px;
+                border-radius: 9px;
                 margin: 1px;
             }
             QProgressBar::chunk:error {
                 background-color: #ff4d4f;
-                border-radius: 7px;
+                border-radius: 9px;
                 margin: 1px;
             }
             QProgressBar::chunk:paused {
                 background-color: #faad14;
-                border-radius: 7px;
+                border-radius: 9px;
                 margin: 1px;
             }
         """)
@@ -423,7 +476,13 @@ class Hanime1GUI(QMainWindow):
     def _init_main_window(self):
         self.setWindowTitle("Hanime1视频工具---BY-yxxawa")
         window_size = self.settings.get("window_size", {"width": 1320, "height": 1485})
-        self.setGeometry(100, 100, window_size.get("width", 1320), window_size.get("height", 1485))
+        window_pos = self.settings.get("window_pos", {"x": 100, "y": 100})
+        self.setGeometry(
+            window_pos.get("x", 100),
+            window_pos.get("y", 100),
+            window_size.get("width", 1320),
+            window_size.get("height", 1485)
+        )
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -472,9 +531,14 @@ class Hanime1GUI(QMainWindow):
         parent_layout.addLayout(search_layout)
 
     def _init_page_navigation(self, parent_layout):
-        parent_layout.addWidget(QLabel("页码导航:"))
+        # 创建页码导航标签，包含页码信息
+        self.page_navigation_label = QLabel(f"页码导航: 第 1 页 / 共 1 页")
+        parent_layout.addWidget(self.page_navigation_label)
+        
         self.page_navigation = PageNavigationWidget()
         self.page_navigation.page_changed.connect(self.on_page_changed)
+        # 连接页码变化信号，更新标签文本
+        self.page_navigation.page_changed.connect(self.update_page_navigation_label)
         parent_layout.addWidget(self.page_navigation)
 
     def _init_tab_widget(self, parent_layout):
@@ -644,7 +708,7 @@ class Hanime1GUI(QMainWindow):
         download_group = QGroupBox("下载管理")
         download_layout = QVBoxLayout(download_group)
 
-        download_layout.addWidget(QLabel("下载队列 (可拖动排序):"))
+        download_layout.addWidget(QLabel("下载队列 :"))
         self.download_list = DownloadListWidget()
         self.download_list.downloads_ref = self.downloads  # 注入引用
         self.download_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -658,15 +722,11 @@ class Hanime1GUI(QMainWindow):
         self.toggle_download_button = QPushButton("开始下载")
         self.toggle_download_button.clicked.connect(self.on_toggle_download)
 
-        self.cancel_download_button = QPushButton("取消下载")
-        self.cancel_download_button.clicked.connect(self.on_cancel_download)
-
         self.clear_download_button = QPushButton("清空列表")
         self.clear_download_button.clicked.connect(self.on_clear_download_list)
 
         for btn in [
             self.toggle_download_button,
-            self.cancel_download_button,
             self.clear_download_button,
         ]:
             download_control_layout.addWidget(btn)
@@ -715,6 +775,7 @@ class Hanime1GUI(QMainWindow):
     def closeEvent(self, event):
         geometry = self.geometry()
         self.settings["window_size"] = {"width": geometry.width(), "height": geometry.height()}
+        self.settings["window_pos"] = {"x": geometry.x(), "y": geometry.y()}
         self.save_settings()
         try:
             self._clear_temp_download_folder()
@@ -809,6 +870,10 @@ class Hanime1GUI(QMainWindow):
 
     def on_page_changed(self, page):
         self.search_videos(page=page)
+    
+    def update_page_navigation_label(self, page):
+        """更新页码导航标签的文本"""
+        self._update_page_label()
 
     def _update_search_history_ui(self):
         self.search_input.clear()
@@ -858,6 +923,12 @@ class Hanime1GUI(QMainWindow):
         worker.signals.error.connect(self.on_search_error)
         self.threadpool.start(worker, priority=10)  # 搜索任务优先级设为 10
 
+    def _update_page_label(self):
+        """更新页码导航标签"""
+        if hasattr(self, 'page_navigation_label'):
+            page_info = self.page_navigation.get_page_info_text()
+            self.page_navigation_label.setText(f"页码导航: {page_info}")
+
     def on_search_complete(self, search_result):
         if search_result and search_result["videos"]:
             self.current_search_results = search_result["videos"]
@@ -882,10 +953,14 @@ class Hanime1GUI(QMainWindow):
                 self.video_list.addItem(item)
 
             self.page_navigation.set_total_pages(search_result.get("total_pages", 1))
+            # 搜索完成后更新页码导航标签
+            self._update_page_label()
             self.statusBar().showMessage(f"搜索完成，找到 {len(search_result['videos'])} 个结果")
         else:
             self.video_list.clear()
             self.page_navigation.set_total_pages(1)
+            # 未找到视频结果时更新页码导航标签
+            self._update_page_label()
             self.statusBar().showMessage("未找到视频结果")
 
     def _load_thumbnail_async(self, url, list_item):
@@ -1122,7 +1197,7 @@ class Hanime1GUI(QMainWindow):
                 "paused": "已暂停",
                 "completed": "已完成",
                 "error": "出错",
-                "cancelled": "已取消",
+
             }
             base_label = label_map[download["status"]]
             if download["status"] == "downloading":
@@ -1157,12 +1232,12 @@ class Hanime1GUI(QMainWindow):
                 "paused": "已暂停",
                 "completed": "已完成",
                 "error": "出错",
-                "cancelled": "已取消",
+
             }
             base_label = label_map[d["status"]]
             if d["status"] == "downloading":
                 base_label = f"{base_label} {int(d.get('progress', 0))}%"
-            text = f"[{base_label}] [{d['video_id']}] {d['title'][:30]}..."
+            text = f"[{base_label}] [{d['video_id']}] {d['title'][:30]}"
             item = self.download_list.item(index)
             if item:
                 item.setText(text)
@@ -1651,69 +1726,14 @@ class Hanime1GUI(QMainWindow):
         self.calculate_and_update_overall_progress()
         self.statusBar().showMessage(f"已继续下载 {started_count} 个任务")
 
-    def on_cancel_download(self):
-        if not self._can_run_action("cancel"):
-            return
-        vids = list(self.active_downloads.keys())
-        for vid in vids:
-            self.active_downloads[vid].cancel()
-            for i, d in enumerate(self.downloads):
-                if d.get("video_id") == vid:
-                    self.downloads[i]["status"] = "cancelled"
-                    self._delete_video_files_async(d)
-            del self.active_downloads[vid]
-        self.update_download_list()
-        self.download_progress.setValue(0)
-        self.download_info.setText("所有下载已取消")
 
-    def _delete_video_files(self, download_item):
-        if not download_item.get("filename"):
-            return
 
-        download_path = self.settings.get(
-            "download_path", os.path.join(os.getcwd(), "hanimeDownload")
-        )
-        temp_path_dir = self.temp_download_dir
-        base_filename = download_item["filename"]
-        final_full = os.path.join(download_path, base_filename)
-        temp_full = os.path.join(temp_path_dir, base_filename)
 
-        for p in [final_full, temp_full]:
-            if os.path.exists(p):
-                try:
-                    os.remove(p)
-                except:
-                    pass
-
-        import glob
-
-        for full in [final_full, temp_full]:
-            part_files = glob.glob(f"{full}.part*")
-            for part_file in part_files:
-                try:
-                    os.remove(part_file)
-                except:
-                    pass
-
-        vid = str(download_item.get("video_id", ""))
-        if vid:
-            import glob
-
-            for base_dir in [download_path, temp_path_dir]:
-                patterns = [
-                    os.path.join(base_dir, f"*{vid}*.mp4"),
-                    os.path.join(base_dir, f"*{vid}*.mp4.part*"),
-                    os.path.join(base_dir, f"*{vid}*.part*"),
-                ]
-                for pat in patterns:
-                    for path in glob.glob(pat):
-                        try:
-                            os.remove(path)
-                        except:
-                            pass
 
     def _ensure_temp_download_dir(self):
         try:
+            import ctypes
+            
             os.makedirs(self.temp_download_dir, exist_ok=True)
             if os.name == "nt":
                 FILE_ATTRIBUTE_HIDDEN = 0x02
@@ -1738,21 +1758,7 @@ class Hanime1GUI(QMainWindow):
         except:
             pass
 
-    def _delete_video_files_async(self, download_item):
-        class DeleteTask(QRunnable):
-            def __init__(self, item):
-                super().__init__()
-                self.item = item
 
-            @pyqtSlot()
-            def run(self):
-                try:
-                    self._delete_video_files(self.item)
-                except:
-                    pass
-
-        task = DeleteTask(download_item)
-        self.threadpool.start(task, priority=0)
 
     def on_clear_download_list(self):
         if not self._can_run_action("clear"):
@@ -1762,6 +1768,7 @@ class Hanime1GUI(QMainWindow):
         for i, d in enumerate(self.downloads):
             d["priority"] = i
         self.update_download_list()
+        self.calculate_and_update_overall_progress()
 
     def _can_run_action(self, name, min_interval_ms=300):
         now = int(time.time() * 1000)
@@ -1898,8 +1905,79 @@ class Hanime1GUI(QMainWindow):
             self.current_favorite_folder = name
             self.update_favorites_list()
 
+    def create_custom_input_dialog(self, title, label, default_text=""):
+        """创建自定义输入对话框，设置固定大小和中文按钮"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setFixedSize(300, 180)
+        
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        label_widget = QLabel(label)
+        layout.addWidget(label_widget)
+        
+        input_widget = QLineEdit(default_text)
+        layout.addWidget(input_widget)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("取消")
+        cancel_button.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_button)
+        
+        confirm_button = QPushButton("确认")
+        confirm_button.setObjectName("primary_btn")
+        confirm_button.clicked.connect(dialog.accept)
+        button_layout.addWidget(confirm_button)
+        
+        layout.addLayout(button_layout)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            return input_widget.text(), True
+        else:
+            return "", False
+    
+    def create_custom_choice_dialog(self, title, label, items):
+        """创建自定义选择对话框，设置固定大小和中文按钮"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setFixedSize(350, 180)
+        
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        label_widget = QLabel(label)
+        layout.addWidget(label_widget)
+        
+        combo_box = QComboBox()
+        combo_box.addItems(items)
+        layout.addWidget(combo_box)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("取消")
+        cancel_button.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_button)
+        
+        confirm_button = QPushButton("确认")
+        confirm_button.setObjectName("primary_btn")
+        confirm_button.clicked.connect(dialog.accept)
+        button_layout.addWidget(confirm_button)
+        
+        layout.addLayout(button_layout)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            return combo_box.currentText(), True
+        else:
+            return "", False
+    
     def on_new_folder(self):
-        name, ok = QInputDialog.getText(self, "新建收藏夹", "请输入名称:")
+        name, ok = self.create_custom_input_dialog("新建收藏夹", "请输入名称:")
         if ok and name.strip() and name.strip() not in self.favorites:
             self.favorites[name.strip()] = []
             self.save_favorites()
@@ -1924,9 +2002,7 @@ class Hanime1GUI(QMainWindow):
 
     def on_rename_folder(self):
         cur = self.folder_combobox.currentText()
-        name, ok = QInputDialog.getText(
-            self, "重命名", f"重命名 '{cur}' 为:", QLineEdit.Normal, cur
-        )
+        name, ok = self.create_custom_input_dialog("重命名", f"重命名 '{cur}' 为:", cur)
         if ok and name.strip() and name.strip() != cur and name.strip() not in self.favorites:
             self.favorites[name.strip()] = self.favorites.pop(cur)
             self.save_favorites()
@@ -2022,7 +2098,7 @@ class Hanime1GUI(QMainWindow):
 
     def on_add_to_favorites_from_menu(self, items):
         names = list(self.favorites.keys())
-        folder, ok = QInputDialog.getItem(self, "选择收藏夹", "选择:", names, 0, False)
+        folder, ok = self.create_custom_choice_dialog("选择收藏夹", "选择:", names)
         if ok and folder:
             for item in items:
                 match = re.search(r"\[(\d+)]\s*(.+)", item.text())
@@ -2098,9 +2174,6 @@ class Hanime1GUI(QMainWindow):
                     lambda: self.on_start_selected_downloads(selected_items)
                 )
 
-            menu.addAction("取消选中项").triggered.connect(
-                lambda: self.on_cancel_selected_downloads(selected_items)
-            )
             menu.addAction("移除选中项").triggered.connect(
                 lambda: self.on_remove_selected_downloads(selected_items)
             )
@@ -2122,23 +2195,12 @@ class Hanime1GUI(QMainWindow):
             self.downloads[idx]["status"] = "downloading"
             self.update_download_list()
 
-    def on_cancel_download_from_menu(self, item):
-        idx = self.download_list.row(item)
-        download = self.downloads[idx]
-        vid = download["video_id"]
-        if vid in self.active_downloads:
-            self.active_downloads[vid].cancel()
-            del self.active_downloads[vid]
 
-        self.downloads[idx]["status"] = "cancelled"
-        self._delete_video_files_async(download)
-        self.update_download_list()
 
     def on_remove_from_download_queue(self, item):
         idx = self.download_list.row(item)
         vid = self.downloads[idx]["video_id"]
         if vid in self.active_downloads:
-            self.active_downloads[vid].cancel()
             del self.active_downloads[vid]
         self.downloads.pop(idx)
         self.update_download_list()
@@ -2163,19 +2225,7 @@ class Hanime1GUI(QMainWindow):
                 if download["status"] in ["pending", "paused"]:
                     self.start_download(idx)
 
-    def on_cancel_selected_downloads(self, items):
-        # 按索引从大到小排序，避免删除时索引变化
-        indices = sorted([self.download_list.row(item) for item in items], reverse=True)
-        for idx in indices:
-            if 0 <= idx < len(self.downloads):
-                download = self.downloads[idx]
-                vid = download["video_id"]
-                if vid in self.active_downloads:
-                    self.active_downloads[vid].cancel()
-                    del self.active_downloads[vid]
-                download["status"] = "cancelled"
-                self._delete_video_files_async(download)
-        self.update_download_list()
+
 
     def on_remove_selected_downloads(self, items):
         # 按索引从大到小排序，避免删除时索引变化
@@ -2184,10 +2234,10 @@ class Hanime1GUI(QMainWindow):
             if 0 <= idx < len(self.downloads):
                 vid = self.downloads[idx]["video_id"]
                 if vid in self.active_downloads:
-                    self.active_downloads[vid].cancel()
                     del self.active_downloads[vid]
                 self.downloads.pop(idx)
         self.update_download_list()
+        self.calculate_and_update_overall_progress()
 
     def load_download_history(self):
         if os.path.exists(self.history_file):

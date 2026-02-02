@@ -85,7 +85,6 @@ class DownloadWorker(QRunnable):
         self.headers = headers or {"User-Agent": self.USER_AGENT}
         self.cookies = cookies or {}
         self.signals = WorkerSignals()
-        self.is_cancelled = False
         self.is_paused = False
         self.progress_lock = None
         self.pause_event = threading.Event()
@@ -132,7 +131,7 @@ class DownloadWorker(QRunnable):
             if supports_range_requests and file_total_size > 0:
                 self._download_with_multithreading(file_total_size)
             else:
-                self._download_with_singlethread(file_total_size, downloaded_size)
+                self._download_with_singlethread(file_total_size)
 
             self.signals.progress.emit(
                 {
@@ -195,9 +194,7 @@ class DownloadWorker(QRunnable):
             }
             concurrent.futures.wait(future_to_chunk)
 
-            if self.is_cancelled:
-                self._cleanup_temp_files(temp_files)
-                return
+
 
         # 合并分片文件
         try:
@@ -239,13 +236,13 @@ class DownloadWorker(QRunnable):
             }
         )
 
-    def _download_with_singlethread(self, file_total_size, downloaded_size):
+    def _download_with_singlethread(self, file_total_size):
         # 检查现有文件大小
         existing_size = 0
         if os.path.exists(self.full_path):
             existing_size = os.path.getsize(self.full_path)
 
-        # 使用已下载的大小（优先使用传入的downloaded_size，其次使用文件大小）
+        # 使用已下载的大小（优先使用实例变量downloaded_size，其次使用文件大小）
         start_pos = max(self.downloaded_size, existing_size)
 
         # 如果已经下载完成，直接返回
@@ -271,8 +268,6 @@ class DownloadWorker(QRunnable):
             # 使用'ab'模式打开文件，追加写入
             with open(self.full_path, "ab") as f:
                 for chunk in r.iter_content(chunk_size=self.CHUNK_SIZE):
-                    if self.is_cancelled:
-                        return
                     self.pause_event.wait()
                     if chunk:
                         f.write(chunk)
@@ -335,8 +330,6 @@ class DownloadWorker(QRunnable):
                     # 使用'ab'模式打开文件，追加写入
                     with open(temp_file_path, "ab") as f:
                         for chunk in r.iter_content(chunk_size=self.CHUNK_SIZE):
-                            if self.is_cancelled:
-                                return {"size": 0}
                             self.pause_event.wait()
                             if chunk:
                                 f.write(chunk)
@@ -431,6 +424,4 @@ class DownloadWorker(QRunnable):
         self.is_paused = False
         self.pause_event.set()
 
-    def cancel(self):
-        self.is_cancelled = True
-        self.pause_event.set()
+

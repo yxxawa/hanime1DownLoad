@@ -57,6 +57,55 @@ class FilterDialog(QDialog):
     def init_ui(self):
         self.setWindowTitle("筛选设置")
         self.setGeometry(300, 300, 600, 800)
+        
+        # 设置对话框样式，解决灰色和白色配色不和谐的问题
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8f9fa;
+            }
+            QGroupBox {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+            }
+            QGroupBox::title {
+                color: #333;
+                font-weight: bold;
+            }
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: #333;
+            }
+            QPushButton:hover {
+                background-color: #e6f7ff;
+                border-color: #1890ff;
+                color: #1890ff;
+            }
+            QPushButton#primary_btn {
+                background-color: #1890ff;
+                border-color: #1890ff;
+                color: white;
+            }
+            QPushButton#primary_btn:hover {
+                background-color: #40a9ff;
+                border-color: #40a9ff;
+            }
+            QComboBox, QLineEdit, QTextEdit, QSpinBox {
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: 6px;
+                background: white;
+            }
+            QComboBox:hover, QLineEdit:hover, QTextEdit:hover, QSpinBox:hover {
+                border-color: #1890ff;
+            }
+            QComboBox:focus, QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {
+                border-color: #1890ff;
+            }
+        """)
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(16)
@@ -277,6 +326,44 @@ class VideoDetailsSettingsDialog(QDialog):
     def init_ui(self):
         self.setWindowTitle("详细信息显示设置")
         self.setFixedWidth(350)
+        
+        # 设置对话框样式，解决灰色和白色配色不和谐的问题
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8f9fa;
+            }
+            QGroupBox {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+            }
+            QGroupBox::title {
+                color: #333;
+                font-weight: bold;
+            }
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: #333;
+            }
+            QPushButton:hover {
+                background-color: #e6f7ff;
+                border-color: #1890ff;
+                color: #1890ff;
+            }
+            QPushButton#primary_btn {
+                background-color: #1890ff;
+                border-color: #1890ff;
+                color: white;
+            }
+            QPushButton#primary_btn:hover {
+                background-color: #40a9ff;
+                border-color: #40a9ff;
+            }
+        """)
+        
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
@@ -377,6 +464,76 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("设置")
         self.setMinimumWidth(500)
         self.setMinimumHeight(600)
+        
+        # 设置对话框样式，解决灰色和白色配色不和谐的问题
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8f9fa;
+            }
+            QGroupBox {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+            }
+            QGroupBox::title {
+                color: #333;
+                font-weight: bold;
+            }
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: #333;
+            }
+            QPushButton:hover {
+                background-color: #e6f7ff;
+                border-color: #1890ff;
+                color: #1890ff;
+            }
+            QPushButton#primary_btn {
+                background-color: #1890ff;
+                border-color: #1890ff;
+                color: white;
+            }
+            QPushButton#primary_btn:hover {
+                background-color: #40a9ff;
+                border-color: #40a9ff;
+            }
+            QComboBox, QLineEdit, QTextEdit, QSpinBox {
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: 6px;
+                background: white;
+            }
+            QComboBox:hover, QLineEdit:hover, QTextEdit:hover, QSpinBox:hover {
+                border-color: #1890ff;
+            }
+            QComboBox:focus, QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {
+                border-color: #1890ff;
+            }
+            QTabWidget {
+                background-color: #f8f9fa;
+            }
+            QTabWidget::pane {
+                border: 1px solid #e0e0e0;
+                background-color: #f8f9fa;
+            }
+            QTabBar::tab {
+                background-color: #f8f9fa;
+                border: 1px solid #e0e0e0;
+                border-bottom: none;
+                padding: 8px 16px;
+                margin-right: 2px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+            }
+            QTabBar::tab:selected {
+                background-color: white;
+                border-color: #e0e0e0;
+                border-bottom-color: white;
+            }
+        """)
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(0)

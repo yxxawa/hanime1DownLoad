@@ -11,7 +11,6 @@ import sys
 import time
 from urllib.parse import urljoin
 
-import certifi
 import requests
 from bs4 import BeautifulSoup
 from zhconv import convert
@@ -125,7 +124,7 @@ class Hanime1API:
 
             with open("settings.json", "w", encoding="utf-8") as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
-        except Exception as e:
+        except Exception:
             pass
 
     def load_session(self):
@@ -165,13 +164,13 @@ class Hanime1API:
                             self.session.cookies.set(
                                 name, cookie_info, domain=".hanime1.me", path="/"
                             )
-                    except Exception as e:
+                    except Exception:
                         continue
-        except Exception as e:
+        except Exception:
             # 如果加载失败，尝试清理旧的settings.json文件
             try:
                 os.rename("settings.json", "settings.json.backup")
-            except:
+            except Exception:
                 pass
 
     def set_cf_clearance(self, cf_clearance_value):
@@ -408,119 +407,90 @@ class Hanime1API:
             videos = list(video_dict.values())
 
             # 解析总页数
-            total_pages = 1
-            page_numbers = []  # 初始化page_numbers列表，避免UnboundLocalError
-
-            # 1. 查找带有pagination类的ul元素（优先级最高）
-            pagination = soup.find("ul", class_="pagination")
-            if pagination:
-                # 从分页ul中提取页码
-                page_items = pagination.find_all("li", class_="page-item")
-
-                for item in page_items:
-                    link = item.find("a", class_="page-link")
-                    if not link:
-                        continue
-
+            def extract_page_numbers():
+                """提取页面中的所有页码信息"""
+                page_numbers = []
+                
+                # 1. 查找带有pagination类的ul元素（优先级最高）
+                pagination = soup.find("ul", class_="pagination")
+                if pagination:
+                    for item in pagination.find_all("li", class_="page-item"):
+                        link = item.find("a", class_="page-link")
+                        if not link:
+                            continue
+                        
+                        text = link.get_text().strip()
+                        href = link.get("href", "")
+                        
+                        # 从文本中提取页码
+                        if text.isdigit() and len(text) <= 3:
+                            page_numbers.append(int(text))
+                        
+                        # 从href中提取页码
+                        page_match = self.REGEX_PAGE_NUM.search(href)
+                        if page_match:
+                            page_numbers.append(int(page_match.group(1)))
+                
+                # 2. 查找所有链接，提取更多页码信息
+                for link in soup.find_all("a", href=True):
+                    href = link.get("href")
                     text = link.get_text().strip()
-                    href = link.get("href", "")
-
-                    # 从文本中提取页码
-                    if text.isdigit() and len(text) <= 3:
-                        page_numbers.append(int(text))
-
+                    
                     # 从href中提取页码
                     page_match = self.REGEX_PAGE_NUM.search(href)
                     if page_match:
                         page_numbers.append(int(page_match.group(1)))
+                    # 从文本中提取页码
+                    elif text.isdigit() and len(text) <= 3:
+                        page_numbers.append(int(text))
+                
+                return list(set(page_numbers))  # 去重
 
-            # 2. 无论是否找到pagination，都查找所有链接，提取更多页码信息
-            all_links = soup.find_all("a", href=True)
-            for link in all_links:
-                href = link.get("href")
-                text = link.get_text().strip()
-
-                # 检查是否是页码链接
-                page_match = self.REGEX_PAGE_NUM.search(href)
-                if page_match:
-                    page_numbers.append(int(page_match.group(1)))
-                elif text.isdigit() and len(text) <= 3:
-                    # 检查文本是否是数字页码
-                    page_numbers.append(int(text))
-
-            # 去重页码列表，避免重复值影响结果
-            unique_page_numbers = list(set(page_numbers))
-
-            # 3. 检查是否有下一页按钮，使用多种方式检测，并增加最后一页判断
-            has_next_page = False
-
-            # 方式1：使用正则表达式匹配文本，但排除可能是上一页的按钮
-            next_links_text = soup.find_all("a", text=self.REGEX_NEXT_PAGE)
-            for link in next_links_text:
-                href = link.get("href", "")
-                text = link.get_text().strip()
-
-                # 排除"上一页"按钮
-                if "上一页" in text:
-                    continue
-
-                # 检查是否是真正的下一页按钮
-                if "page" in href or any(keyword in text for keyword in ["下一", ">"]):
-                    has_next_page = True
-                    break
-
-            # 方式2：查找包含>、»等符号的链接，但排除可能是上一页的按钮
-            if not has_next_page:
+            def has_next_page_button():
+                """检查是否存在下一页按钮"""
+                # 方式1：使用正则表达式匹配文本
+                next_links = soup.find_all("a", text=self.REGEX_NEXT_PAGE)
+                for link in next_links:
+                    href = link.get("href", "")
+                    text = link.get_text().strip()
+                    if "上一页" not in text and ("page" in href or any(keyword in text for keyword in ["下一", ">"])):
+                        return True
+                
+                # 方式2：查找包含>、»等符号的链接
                 arrow_links = soup.find_all("a", text=re.compile(r"[>»]"))
                 for link in arrow_links:
                     href = link.get("href", "")
                     text = link.get_text().strip()
-
-                    # 排除"上一页"按钮
-                    if "<" in text or "‹" in text:
-                        continue
-
-                    # 检查是否是真正的下一页按钮
-                    if "page" in href or len(text.strip()) <= 2:  # 只有符号的按钮
-                        has_next_page = True
-                        break
-
-            # 方式3：查找带有特定class的下一页按钮
-            if not has_next_page:
+                    if "<" not in text and "‹" not in text and ("page" in href or len(text.strip()) <= 2):
+                        return True
+                
+                # 方式3：查找带有特定class的下一页按钮
                 next_buttons = soup.find_all("a", {"class": re.compile(r"next|paging|pagination")})
                 for button in next_buttons:
                     href = button.get("href", "")
                     text = button.get_text().strip()
+                    if "上一页" not in text and "<" not in text and ("page" in href or any(keyword in text for keyword in ["下一", ">"])):
+                        return True
+                
+                return False
 
-                    # 排除"上一页"按钮
-                    if "上一页" in text or "<" in text:
-                        continue
-
-                    # 检查是否是真正的下一页按钮
-                    if "page" in href or any(keyword in text for keyword in ["下一", ">"]):
-                        has_next_page = True
-                        break
+            # 提取页码并计算总页数
+            unique_page_numbers = extract_page_numbers()
+            has_next = has_next_page_button()
 
             # 计算总页数
-            calculated_total_pages = 1
-
             if unique_page_numbers:
                 # 如果有页码列表，总页数为最大页码
                 calculated_total_pages = max(unique_page_numbers)
-            elif has_next_page:
+                # 检查当前页是否可能是最后一页
+                if has_next and page >= calculated_total_pages:
+                    calculated_total_pages = page
+            elif has_next:
                 # 如果有下一页按钮，总页数为当前页+1
                 calculated_total_pages = page + 1
             else:
                 # 如果没有下一页按钮，当前页就是最后一页
                 calculated_total_pages = page
-
-            # 进一步优化：如果检测到有下一页，但页码列表显示当前页接近最大页码，可能当前页就是最后一页
-            if has_next_page and unique_page_numbers:
-                max_page = max(unique_page_numbers)
-                if page >= max_page:
-                    # 当前页大于或等于页码列表中的最大页码，可能当前页就是最后一页
-                    has_next_page = False
-                    calculated_total_pages = page
 
             # 确保总页数至少为1
             total_pages = max(1, calculated_total_pages)
