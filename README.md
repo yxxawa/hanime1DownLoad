@@ -54,18 +54,33 @@ hanime1DownLoad 是一个基于 PyQt5 开发的视频下载工具,支持搜索/�
 ### 项目结构
 
 ```
-Hanime1Downlaod/
-├── main.py              # 主入口文件
-├── src/                 # 源代码目录
-│   ├── api/             # API 相关代码
-│   ├── constants/       # 常量定义
-│   ├── dialogs/         # 对话框相关代码
-│   ├── gui/             # 主界面相关代码
-│   ├── utils/           # 工具函数
-│   ├── widgets/         # 自定义控件
-│   └── workers/         # 后台工作线程
-├── 256x256.ico          # 应用图标
-└── README.md            # 项目说明文档
+Hanime1Download/ 
+ ├── main.py              # 主入口文件 
+ ├── src/                 # 源代码目录 
+ │   ├── api/             # API 相关代码 
+ │   │   ├── __init__.py  # 包初始化文件 
+ │   │   └── hanime1_api.py  # Hanime1 API 实现 
+ │   ├── constants/       # 常量定义 
+ │   │   ├── __init__.py  # 包初始化文件 
+ │   │   └── constants.py  # 常量定义文件 
+ │   ├── dialogs/         # 对话框相关代码 
+ │   │   ├── __init__.py  # 包初始化文件 
+ │   │   └── dialogs.py    # 对话框实现 
+ │   ├── gui/             # 主界面相关代码 
+ │   │   ├── __init__.py  # 包初始化文件 
+ │   │   └── gui.py        # 主界面实现 
+ │   ├── utils/           # 工具函数 
+ │   │   └── __init__.py  # 包初始化文件 
+ │   ├── widgets/         # 自定义控件 
+ │   │   ├── __init__.py  # 包初始化文件 
+ │   │   └── widgets.py    # 自定义控件实现 
+ │   └── workers/         # 后台工作线程 
+ │       ├── __init__.py  # 包初始化文件 
+ │       └── workers.py    # 工作线程实现 
+ ├── assets/              # 资源文件目录 
+ │   ├── close.png        # 关闭图标 
+ │   └── open.png         # 打开图标 
+ └── 256x256.ico          # 应用图标 
 ```
 
 ### 核心模块说明
@@ -87,5 +102,6 @@ Hanime1Downlaod/
 - 本工具仅用于学习和研究目的
 - 请遵守相关法律法规，合理使用本工具
 - 下载的视频资源版权归原作者所有，请在24小时内删除
+
 
 
