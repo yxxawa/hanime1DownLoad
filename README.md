@@ -4,8 +4,9 @@
 
 hanime1DownLoad 是一个基于 PyQt5 开发的视频下载工具,支持搜索/下载hanime的视频
 ## 界面
-<img width="2559" height="1526" alt="1" src="https://github.com/user-attachments/assets/9e04be1a-5165-4fc6-8fea-9a98eefa2038" />
-<img width="2559" height="1527" alt="2" src="https://github.com/user-attachments/assets/e879932b-a276-480c-a480-cf7ef6e8cdab" />
+<img width="2559" height="1524" alt="1" src="https://github.com/user-attachments/assets/a9f46eec-805b-4c34-a111-d6504eb52b5a" />
+<img width="2559" height="1527" alt="2" src="https://github.com/user-attachments/assets/49f6469d-b063-4e5e-9e3c-396d748e0721" />
+
 
 ## 系统要求
 
@@ -86,4 +87,5 @@ Hanime1Downlaod/
 - 本工具仅用于学习和研究目的
 - 请遵守相关法律法规，合理使用本工具
 - 下载的视频资源版权归原作者所有，请在24小时内删除
+
 
