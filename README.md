@@ -1,4 +1,4 @@
-<img width="1280" height="640" alt="hanime1DownLoad" src="https://github.com/user-attachments/assets/cf772c52-ae6f-445a-8c70-e9fcef68eafb" />
+<img width="1280" height="640" alt="hanime1DownLoad" src="https://github.com/user-attachments/assets/003d3091-2356-4a94-887e-d08b49354ca2" />
 
 ## 界面
 <img width="2559" height="1524" alt="1" src="https://github.com/user-attachments/assets/a9f46eec-805b-4c34-a111-d6504eb52b5a" />
@@ -99,6 +99,7 @@ Hanime1Download/
 - 本工具仅用于学习和研究目的
 - 请遵守相关法律法规，合理使用本工具
 - 下载的视频资源版权归原作者所有，请在24小时内删除
+
 
 
 
