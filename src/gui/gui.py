@@ -87,6 +87,8 @@ class Hanime1GUI(QMainWindow):
             "search_history": [],
             "show_thumbnails": False,
             "show_announcements": True,
+            "font": "Segoe UI",
+            "font_size": 9,
             "video_details_visibility": {
                 "title": True,
                 "upload_date": True,
@@ -159,13 +161,15 @@ class Hanime1GUI(QMainWindow):
     def _apply_global_styles(self):
         """应用全局 QSS 样式"""
         # 设置全局字体
-        QApplication.setFont(QFont("Segoe UI", 9))
+        font_name = self.settings.get("font", "Segoe UI")
+        font_size = self.settings.get("font_size", 9)
+        QApplication.setFont(QFont(font_name, font_size))
         
         # 直接使用相对路径，让Qt自动处理路径解析
-        self.setStyleSheet("""
+        style_sheet = """
             /* 全局基础样式 */
             * {
-                font-family: 'Segoe UI';
+                font-family: '%s';
             }
             
             /* 窗口和面板样式 */
@@ -471,7 +475,11 @@ class Hanime1GUI(QMainWindow):
                 border-radius: 9px;
                 margin: 1px;
             }
-        """)
+        """
+        
+        # 使用字符串格式化来插入字体名称
+        style_sheet = style_sheet % font_name
+        self.setStyleSheet(style_sheet)
 
     def _init_main_window(self):
         self.setWindowTitle("Hanime1视频工具---BY-yxxawa")

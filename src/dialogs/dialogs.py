@@ -276,6 +276,8 @@ class FilterDialog(QDialog):
         self.reset_button.clicked.connect(self.reset_settings)
 
         self.save_button = QPushButton("保存")
+        self.save_button.setObjectName("primary_btn")
+        self.save_button.setStyleSheet("QPushButton#primary_btn { background-color: #1890ff; border-color: #1890ff; color: white; border-radius: 6px; padding: 6px 12px; }")
         self.save_button.clicked.connect(self.accept)
 
         button_layout.addWidget(self.reset_button)
@@ -443,6 +445,8 @@ class SettingsDialog(QDialog):
             "cloudflare_cookie": "",
             "show_thumbnails": False,
             "show_announcements": True,
+            "font": "Segoe UI",
+            "font_size": 9,
             "video_details_visibility": {
                 "title": True,
                 "upload_date": True,
@@ -644,6 +648,42 @@ class SettingsDialog(QDialog):
         display_vbox.addWidget(self.details_visibility_btn)
 
         ui_layout.addWidget(display_group)
+
+        # 字体设置
+        font_group = QGroupBox("字体设置")
+        font_vbox = QVBoxLayout(font_group)
+        font_vbox.setSpacing(12)
+
+        font_layout = QHBoxLayout()
+        font_layout.addWidget(QLabel("字体:"))
+        self.font_combo = QComboBox()
+        # 添加常用系统字体
+        font_list = ["Segoe UI", "微软雅黑", "Arial", "Times New Roman", "Courier New", "SimSun", "SimHei"]
+        for font_name in font_list:
+            self.font_combo.addItem(font_name, font_name)
+        # 设置当前字体
+        current_font = self.settings.get("font", "Segoe UI")
+        idx = self.font_combo.findData(current_font)
+        if idx != -1:
+            self.font_combo.setCurrentIndex(idx)
+        font_layout.addWidget(self.font_combo, 1)
+
+        font_layout.addWidget(QLabel("字体大小:"), 1)
+        self.font_size_spinbox = QSpinBox()
+        self.font_size_spinbox.setRange(6, 24)
+        self.font_size_spinbox.setValue(self.settings.get("font_size", 9))
+        font_layout.addWidget(self.font_size_spinbox, 1)
+
+        font_vbox.addLayout(font_layout)
+
+        reset_font_btn = QPushButton("恢复默认字体")
+        reset_font_btn.clicked.connect(self.reset_font_settings)
+        reset_font_btns = QHBoxLayout()
+        reset_font_btns.addStretch()
+        reset_font_btns.addWidget(reset_font_btn)
+        font_vbox.addLayout(reset_font_btns)
+
+        ui_layout.addWidget(font_group)
         ui_layout.addStretch()
         tab_widget.addTab(ui_tab, "界面设置")
 
@@ -690,8 +730,8 @@ class SettingsDialog(QDialog):
         self.cancel_button.clicked.connect(self.reject)
 
         bottom_layout.addStretch()
-        bottom_layout.addWidget(self.save_button)
         bottom_layout.addWidget(self.cancel_button)
+        bottom_layout.addWidget(self.save_button)
         main_layout.addLayout(bottom_layout)
 
     def browse_path(self):
@@ -725,12 +765,86 @@ class SettingsDialog(QDialog):
                 self.parent.save_settings()
             QMessageBox.information(self, "成功", "Cookie已清除")
 
+    def reset_font_settings(self):
+        """恢复默认字体设置"""
+        self.font_combo.setCurrentText("Segoe UI")
+        self.font_size_spinbox.setValue(9)
+
     def accept(self):
         """重写accept方法，在保存设置时同时保存Cookie到会话"""
+        # 检查字体是否被修改
+        old_font = self.parent.settings.get("font", "Segoe UI")
+        old_font_size = self.parent.settings.get("font_size", 9)
+        new_font = self.font_combo.currentText()
+        new_font_size = self.font_size_spinbox.value()
+        
+        # 应用Cookie
         cookie_text = self.cloudflare_cookie_edit.toPlainText().strip()
         if cookie_text and hasattr(self.parent, "apply_cloudflare_cookie"):
             self.parent.apply_cloudflare_cookie(cookie_text)
+        
+        # 保存设置到父窗口
+        new_settings = self.get_settings()
+        self.parent.settings.update(new_settings)
+        self.parent.save_settings()
+        
+        # 关闭对话框
         super().accept()
+        
+        # 如果字体或字体大小被修改，显示重启提示
+        if old_font != new_font or old_font_size != new_font_size:
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+            from PyQt5.QtCore import Qt
+            # 使用自定义对话框来精确控制按钮顺序
+            msg_box = QDialog(self)
+            msg_box.setWindowTitle("字体修改提示")
+            msg_box.setFixedSize(300, 150)
+            msg_box.setWindowFlags(msg_box.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+            
+            # 主布局
+            main_layout = QVBoxLayout(msg_box)
+            main_layout.setContentsMargins(20, 20, 20, 20)
+            main_layout.setSpacing(16)
+            
+            # 提示文本
+            text_label = QLabel("字体修改需要重启后生效")
+            main_layout.addWidget(text_label)
+            
+            # 按钮布局
+            button_layout = QHBoxLayout()
+            button_layout.addStretch()
+            
+            # 稍后重启按钮
+            later_btn = QPushButton("稍后重启")
+            later_btn.setFixedWidth(90)
+            button_layout.addWidget(later_btn)
+            
+            # 立即重启按钮
+            restart_btn = QPushButton("立即重启")
+            restart_btn.setObjectName("primary_btn")
+            restart_btn.setStyleSheet("QPushButton#primary_btn { background-color: #1890ff; border-color: #1890ff; color: white; border-radius: 6px; padding: 6px 12px; }")
+            restart_btn.setFixedWidth(90)
+            button_layout.addWidget(restart_btn)
+            
+            main_layout.addLayout(button_layout)
+            
+            # 连接信号
+            later_btn.clicked.connect(msg_box.reject)
+            restart_btn.clicked.connect(msg_box.accept)
+            
+            # 显示对话框
+            result = msg_box.exec_()
+            
+            # 检查用户选择
+            if result == QDialog.Accepted:
+                import sys
+                import os
+                import subprocess
+                # 在Windows上使用subprocess.Popen更可靠
+                # 启动新进程
+                subprocess.Popen([sys.executable] + sys.argv)
+                # 退出当前进程
+                sys.exit(0)
 
     def get_settings(self):
         self.settings["download_mode"] = (
@@ -747,4 +861,7 @@ class SettingsDialog(QDialog):
         self.settings["show_thumbnails"] = self.show_thumbnails_checkbox.isChecked()
         self.settings["show_announcements"] = self.show_announcements_checkbox.isChecked()
         self.settings["cloudflare_cookie"] = self.cloudflare_cookie_edit.toPlainText().strip()
+        # 保存字体设置
+        self.settings["font"] = self.font_combo.currentText()
+        self.settings["font_size"] = self.font_size_spinbox.value()
         return self.settings
