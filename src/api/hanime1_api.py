@@ -1,7 +1,7 @@
 """
-Hanime1API - 用于与Hanime1网站交互的API客户端
+Hanime1API 模块
 
-该模块提供了与Hanime1网站进行交互的功能，包括视频搜索、获取视频信息、管理会话和Cookie等。
+与Hanime1网站交互的API客户端，提供视频搜索、获取视频信息、管理会话和Cookie等功能。
 """
 
 import json
@@ -26,9 +26,9 @@ if hasattr(sys, "_MEIPASS"):
 
 class Hanime1API:
     """
-    Hanime1API类，用于与Hanime1网站进行交互
+    与Hanime1网站交互的API客户端类
 
-    该类提供了以下功能：
+    功能：
     - 视频搜索
     - 获取视频详细信息
     - 会话管理
@@ -94,14 +94,12 @@ class Hanime1API:
 
     def _get_cache_key(self, query, page, filter_params):
         """生成缓存键"""
-        # 将 filter_params 转换为可哈希的字符串
+        # 将筛选参数转换为可哈希的字符串
         filter_str = json.dumps(filter_params, sort_keys=True) if filter_params else ""
         return (query, page, filter_str)
 
     def save_session(self):
-        """
-        保存session信息和请求头到settings.json文件
-        """
+        """保存session信息和请求头到settings.json文件"""
         try:
             settings = {}
             if os.path.exists("settings.json"):
@@ -128,9 +126,7 @@ class Hanime1API:
             pass
 
     def load_session(self):
-        """
-        从settings.json加载session信息和请求头
-        """
+        """从settings.json加载session信息和请求头"""
         try:
             if not os.path.exists("settings.json"):
                 return
@@ -174,8 +170,7 @@ class Hanime1API:
                 pass
 
     def set_cf_clearance(self, cf_clearance_value):
-        """
-        手动设置cf_clearance cookie，这是Cloudflare反爬虫保护的关键
+        """手动设置cf_clearance cookie，这是Cloudflare反爬虫保护的关键
 
         参数:
             cf_clearance_value: cf_clearance cookie的值
@@ -198,8 +193,7 @@ class Hanime1API:
             self.save_session()
 
     def search_videos(self, query, page=1, filter_params=None):
-        """
-        搜索视频，使用Han1meViewer-main的代码逻辑
+        """搜索视频
 
         参数:
             query: 搜索关键词
@@ -299,8 +293,7 @@ class Hanime1API:
 
             # 根据类型使用不同的容器选择器
             if current_genre in ["裏番", "泡麵番"]:
-                # 裏番和泡麵番使用特殊的容器结构
-                # 查找所有包含视频的a标签
+                # 裏番和泡麵番使用特殊的容器结构，需要从#home-rows-wrapper中查找
                 video_links = soup.select('#home-rows-wrapper a[href*="/watch?v="]')
 
                 for a_tag in video_links:
@@ -411,7 +404,7 @@ class Hanime1API:
                 """提取页面中的所有页码信息"""
                 page_numbers = []
                 
-                # 1. 查找带有pagination类的ul元素（优先级最高）
+                # 1. 优先查找带有pagination类的分页组件
                 pagination = soup.find("ul", class_="pagination")
                 if pagination:
                     for item in pagination.find_all("li", class_="page-item"):
@@ -422,25 +415,22 @@ class Hanime1API:
                         text = link.get_text().strip()
                         href = link.get("href", "")
                         
-                        # 从文本中提取页码
+                        # 从文本和链接中提取页码
                         if text.isdigit() and len(text) <= 3:
                             page_numbers.append(int(text))
                         
-                        # 从href中提取页码
                         page_match = self.REGEX_PAGE_NUM.search(href)
                         if page_match:
                             page_numbers.append(int(page_match.group(1)))
                 
-                # 2. 查找所有链接，提取更多页码信息
+                # 2. 查找所有链接，提取更多页码信息（作为备选方案）
                 for link in soup.find_all("a", href=True):
                     href = link.get("href")
                     text = link.get_text().strip()
                     
-                    # 从href中提取页码
                     page_match = self.REGEX_PAGE_NUM.search(href)
                     if page_match:
                         page_numbers.append(int(page_match.group(1)))
-                    # 从文本中提取页码
                     elif text.isdigit() and len(text) <= 3:
                         page_numbers.append(int(text))
                 
@@ -448,7 +438,7 @@ class Hanime1API:
 
             def has_next_page_button():
                 """检查是否存在下一页按钮"""
-                # 方式1：使用正则表达式匹配文本
+                # 方式1：使用正则表达式匹配"下一頁"、"下一页"等文本
                 next_links = soup.find_all("a", text=self.REGEX_NEXT_PAGE)
                 for link in next_links:
                     href = link.get("href", "")
@@ -456,7 +446,7 @@ class Hanime1API:
                     if "上一页" not in text and ("page" in href or any(keyword in text for keyword in ["下一", ">"])):
                         return True
                 
-                # 方式2：查找包含>、»等符号的链接
+                # 方式2：查找包含>、»等箭头符号的链接
                 arrow_links = soup.find_all("a", text=re.compile(r"[>»]"))
                 for link in arrow_links:
                     href = link.get("href", "")
@@ -464,7 +454,7 @@ class Hanime1API:
                     if "<" not in text and "‹" not in text and ("page" in href or len(text.strip()) <= 2):
                         return True
                 
-                # 方式3：查找带有特定class的下一页按钮
+                # 方式3：查找带有next、paging、pagination等class的按钮
                 next_buttons = soup.find_all("a", {"class": re.compile(r"next|paging|pagination")})
                 for button in next_buttons:
                     href = button.get("href", "")
@@ -482,11 +472,11 @@ class Hanime1API:
             if unique_page_numbers:
                 # 如果有页码列表，总页数为最大页码
                 calculated_total_pages = max(unique_page_numbers)
-                # 检查当前页是否可能是最后一页
+                # 检查当前页是否可能是最后一页（避免页码显示不完整的情况）
                 if has_next and page >= calculated_total_pages:
                     calculated_total_pages = page
             elif has_next:
-                # 如果有下一页按钮，总页数为当前页+1
+                # 如果有下一页按钮但没有页码列表，总页数为当前页+1
                 calculated_total_pages = page + 1
             else:
                 # 如果没有下一页按钮，当前页就是最后一页
@@ -515,12 +505,11 @@ class Hanime1API:
         return result
 
     def get_video_info(self, video_id, visibility_settings=None):
-        """
-        获取视频详细信息
+        """获取视频详细信息
 
         参数:
             video_id: 视频ID
-            visibility_settings: 字段解析控制设置，如果为 None 则解析所有字段
+            visibility_settings: 字段解析控制设置，为None时解析所有字段
         """
         url = f"{self.base_url}/watch?v={video_id}"
         max_retries = 2
@@ -630,6 +619,7 @@ class Hanime1API:
                         scripts = player_div_wrapper.find_all("script")
                         for script in scripts:
                             if script.string:
+                                # 使用正则表达式从JavaScript代码中提取视频源URL
                                 result = self.REGEX_VIDEO_SOURCE.search(script.string)
                                 if result:
                                     video_url = result.group(1)

@@ -276,8 +276,6 @@ class FilterDialog(QDialog):
         self.reset_button.clicked.connect(self.reset_settings)
 
         self.save_button = QPushButton("保存")
-        self.save_button.setObjectName("primary_btn")
-        self.save_button.setStyleSheet("QPushButton#primary_btn { background-color: #1890ff; border-color: #1890ff; color: white; border-radius: 6px; padding: 6px 12px; }")
         self.save_button.clicked.connect(self.accept)
 
         button_layout.addWidget(self.reset_button)
@@ -730,8 +728,8 @@ class SettingsDialog(QDialog):
         self.cancel_button.clicked.connect(self.reject)
 
         bottom_layout.addStretch()
-        bottom_layout.addWidget(self.cancel_button)
         bottom_layout.addWidget(self.save_button)
+        bottom_layout.addWidget(self.cancel_button)
         main_layout.addLayout(bottom_layout)
 
     def browse_path(self):
@@ -772,79 +770,10 @@ class SettingsDialog(QDialog):
 
     def accept(self):
         """重写accept方法，在保存设置时同时保存Cookie到会话"""
-        # 检查字体是否被修改
-        old_font = self.parent.settings.get("font", "Segoe UI")
-        old_font_size = self.parent.settings.get("font_size", 9)
-        new_font = self.font_combo.currentText()
-        new_font_size = self.font_size_spinbox.value()
-        
-        # 应用Cookie
         cookie_text = self.cloudflare_cookie_edit.toPlainText().strip()
         if cookie_text and hasattr(self.parent, "apply_cloudflare_cookie"):
             self.parent.apply_cloudflare_cookie(cookie_text)
-        
-        # 保存设置到父窗口
-        new_settings = self.get_settings()
-        self.parent.settings.update(new_settings)
-        self.parent.save_settings()
-        
-        # 关闭对话框
         super().accept()
-        
-        # 如果字体或字体大小被修改，显示重启提示
-        if old_font != new_font or old_font_size != new_font_size:
-            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
-            from PyQt5.QtCore import Qt
-            # 使用自定义对话框来精确控制按钮顺序
-            msg_box = QDialog(self)
-            msg_box.setWindowTitle("字体修改提示")
-            msg_box.setFixedSize(300, 150)
-            msg_box.setWindowFlags(msg_box.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-            
-            # 主布局
-            main_layout = QVBoxLayout(msg_box)
-            main_layout.setContentsMargins(20, 20, 20, 20)
-            main_layout.setSpacing(16)
-            
-            # 提示文本
-            text_label = QLabel("字体修改需要重启后生效")
-            main_layout.addWidget(text_label)
-            
-            # 按钮布局
-            button_layout = QHBoxLayout()
-            button_layout.addStretch()
-            
-            # 稍后重启按钮
-            later_btn = QPushButton("稍后重启")
-            later_btn.setFixedWidth(90)
-            button_layout.addWidget(later_btn)
-            
-            # 立即重启按钮
-            restart_btn = QPushButton("立即重启")
-            restart_btn.setObjectName("primary_btn")
-            restart_btn.setStyleSheet("QPushButton#primary_btn { background-color: #1890ff; border-color: #1890ff; color: white; border-radius: 6px; padding: 6px 12px; }")
-            restart_btn.setFixedWidth(90)
-            button_layout.addWidget(restart_btn)
-            
-            main_layout.addLayout(button_layout)
-            
-            # 连接信号
-            later_btn.clicked.connect(msg_box.reject)
-            restart_btn.clicked.connect(msg_box.accept)
-            
-            # 显示对话框
-            result = msg_box.exec_()
-            
-            # 检查用户选择
-            if result == QDialog.Accepted:
-                import sys
-                import os
-                import subprocess
-                # 在Windows上使用subprocess.Popen更可靠
-                # 启动新进程
-                subprocess.Popen([sys.executable] + sys.argv)
-                # 退出当前进程
-                sys.exit(0)
 
     def get_settings(self):
         self.settings["download_mode"] = (

@@ -1,5 +1,5 @@
 """
-Main GUI window for Hanime1DL
+Hanime1DL 主界面窗口
 """
 
 import json
@@ -170,6 +170,7 @@ class Hanime1GUI(QMainWindow):
             /* 全局基础样式 */
             * {
                 font-family: '%s';
+                font-size: %dpt;
             }
             
             /* 窗口和面板样式 */
@@ -477,9 +478,17 @@ class Hanime1GUI(QMainWindow):
             }
         """
         
-        # 使用字符串格式化来插入字体名称
-        style_sheet = style_sheet % font_name
+        # 使用字符串格式化来插入字体名称和大小
+        style_sheet = style_sheet % (font_name, font_size)
         self.setStyleSheet(style_sheet)
+        
+        # 强制更新界面
+        self.update()
+        self.repaint()
+        # 更新所有子控件
+        for widget in self.findChildren(QWidget):
+            widget.update()
+            widget.repaint()
 
     def _init_main_window(self):
         self.setWindowTitle("Hanime1视频工具---BY-yxxawa")
@@ -839,12 +848,30 @@ class Hanime1GUI(QMainWindow):
             new_cookie = new_settings.get("cloudflare_cookie", "")
             old_show_thumbnails = self.settings.get("show_thumbnails", False)
             new_show_thumbnails = new_settings.get("show_thumbnails", False)
+            old_font = self.settings.get("font", "Segoe UI")
+            new_font = new_settings.get("font", "Segoe UI")
+            old_font_size = self.settings.get("font_size", 9)
+            new_font_size = new_settings.get("font_size", 9)
 
             self.settings.update(new_settings)
             self.save_settings()
 
+            # 如果字体设置改变，重新应用全局样式
+            if old_font != new_font or old_font_size != new_font_size:
+                # 重新应用全局样式，包括新的字体设置
+                self._apply_global_styles()
+                # 刷新搜索列表（如果有结果）
+                if self.current_search_results:
+                    self.on_search_complete(
+                        {
+                            "videos": self.current_search_results,
+                            "total_pages": self.page_navigation.total_pages,
+                        }
+                    )
+                # 刷新收藏夹列表
+                self.update_favorites_list()
             # 如果缩略图设置改变，刷新当前显示的列表
-            if old_show_thumbnails != new_show_thumbnails:
+            elif old_show_thumbnails != new_show_thumbnails:
                 # 刷新搜索列表（如果有结果）
                 if self.current_search_results:
                     self.on_search_complete(

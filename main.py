@@ -1,5 +1,5 @@
 """
-Entry point for Hanime1DL
+Hanime1DL 主入口文件
 """
 
 import multiprocessing
@@ -15,9 +15,7 @@ from src.gui.gui import Hanime1GUI
 
 
 class DeclarationDialog(QDialog):
-    """
-    首次启动时的声明弹窗
-    """
+    """首次启动时的声明弹窗"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,9 +63,7 @@ class DeclarationDialog(QDialog):
 
 
 class AnnouncementDialog(QDialog):
-    """
-    远程公告弹窗
-    """
+    """远程公告弹窗"""
     
     def __init__(self, content, title, parent=None):
         super().__init__(parent)
@@ -105,9 +101,7 @@ class AnnouncementDialog(QDialog):
 
 
 def _get_remote_content():
-    """
-    从远程获取内容
-    """
+    """从远程获取内容"""
     url = "https://gitee.com/yxxawa/gg/raw/master/GG.txt"
     try:
         response = requests.get(url, timeout=10)
@@ -120,9 +114,7 @@ def _get_remote_content():
 
 
 def get_remote_announcement():
-    """
-    从远程获取公告内容
-    """
+    """从远程获取公告内容"""
     lines = _get_remote_content()
     title = "公告"
     announcement_content = ""
@@ -146,9 +138,7 @@ def get_remote_announcement():
 
 
 def get_program_title():
-    """
-    从远程获取程序标题
-    """
+    """从远程获取程序标题"""
     lines = _get_remote_content()
     if lines:
         first_line = lines[0]
@@ -159,9 +149,7 @@ def get_program_title():
 
 
 def _launch_application(app, show_announcements):
-    """
-    启动应用程序
-    """
+    """启动应用程序"""
     # 获取远程公告并显示
     if show_announcements:
         title, content = get_remote_announcement()

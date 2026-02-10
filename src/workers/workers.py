@@ -1,5 +1,5 @@
 """
-Worker classes for background tasks in Hanime1DL
+Hanime1DL 后台任务工作线程类
 """
 
 import concurrent.futures
@@ -64,7 +64,7 @@ class DownloadWorker(QRunnable):
 
     # 常量定义
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    CHUNK_SIZE = 131072  # 下载块大小从8KB增加到128KB，减少I/O操作次数
+    CHUNK_SIZE = 131072  # 下载块大小128KB，减少I/O操作次数
     MIN_CHUNK_SIZE = 1024 * 1024  # 最小块大小(1MB)，小于此值使用单线程
 
     def __init__(
