@@ -5,6 +5,7 @@ Hanime1API 模块
 """
 
 import json
+import logging
 import os
 import re
 import sys
@@ -15,13 +16,32 @@ import requests
 from bs4 import BeautifulSoup
 from zhconv import convert
 
+
 # 处理 PyInstaller 打包后的环境路径问题
-if hasattr(sys, "_MEIPASS"):
-    # 设置 requests 使用打包内的证书
-    cert_path = os.path.join(sys._MEIPASS, "certifi", "cacert.pem")
-    if os.path.exists(cert_path):
-        os.environ["REQUESTS_CA_BUNDLE"] = cert_path
-        os.environ["SSL_CERT_FILE"] = cert_path
+def _setup_cert_path():
+    """设置 SSL 证书路径"""
+    try:
+        import certifi
+        cert_path = certifi.where()
+        if cert_path and os.path.exists(cert_path):
+            os.environ["REQUESTS_CA_BUNDLE"] = cert_path
+            os.environ["SSL_CERT_FILE"] = cert_path
+            logging.info(f"使用 certifi 证书: {cert_path}")
+            return
+    except ImportError:
+        pass
+
+    if hasattr(sys, "_MEIPASS"):
+        cert_path = os.path.join(sys._MEIPASS, "certifi", "cacert.pem")
+        if os.path.exists(cert_path):
+            os.environ["REQUESTS_CA_BUNDLE"] = cert_path
+            os.environ["SSL_CERT_FILE"] = cert_path
+            logging.info(f"使用打包内证书: {cert_path}")
+            return
+
+    logging.warning("未找到 SSL 证书，使用系统默认证书")
+
+_setup_cert_path()
 
 
 class Hanime1API:
@@ -92,6 +112,14 @@ class Hanime1API:
         self.search_cache = {}
         self.cache_ttl = 300  # 缓存有效期 5 分钟
 
+    def _convert_to_simplified(self, text):
+        """将繁体中文转换为简体中文"""
+        try:
+            return convert(text, "zh-cn")
+        except Exception as e:
+            logging.warning(f"繁简转换失败: {e}")
+            return text
+
     def _get_cache_key(self, query, page, filter_params):
         """生成缓存键"""
         # 将筛选参数转换为可哈希的字符串
@@ -122,8 +150,8 @@ class Hanime1API:
 
             with open("settings.json", "w", encoding="utf-8") as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"Failed to save session: {e}")
 
     def load_session(self):
         """从settings.json加载session信息和请求头"""
@@ -160,14 +188,16 @@ class Hanime1API:
                             self.session.cookies.set(
                                 name, cookie_info, domain=".hanime1.me", path="/"
                             )
-                    except Exception:
+                    except Exception as e:
+                        logging.warning(f"Failed to load cookie {name}: {e}")
                         continue
-        except Exception:
+        except Exception as e:
+            logging.warning(f"Failed to load session: {e}")
             # 如果加载失败，尝试清理旧的settings.json文件
             try:
                 os.rename("settings.json", "settings.json.backup")
-            except Exception:
-                pass
+            except Exception as e:
+                logging.warning(f"Failed to backup settings.json: {e}")
 
     def set_cf_clearance(self, cf_clearance_value):
         """手动设置cf_clearance cookie，这是Cloudflare反爬虫保护的关键
@@ -320,7 +350,7 @@ class Hanime1API:
                     title_element = card.find("div", class_="home-rows-videos-title")
                     if not title_element:
                         continue
-                    title = convert(title_element.text.strip(), "zh-cn")
+                    title = self._convert_to_simplified(title_element.text.strip())
 
                     # 提取封面URL
                     img = card.find("img")
@@ -380,7 +410,7 @@ class Hanime1API:
                         )
                     if not title_element:
                         continue
-                    title = convert(title_element.text.strip(), "zh-cn")
+                    title = self._convert_to_simplified(title_element.text.strip())
 
                     # 提取封面URL
                     img = card.find("img")
@@ -403,7 +433,7 @@ class Hanime1API:
             def extract_page_numbers():
                 """提取页面中的所有页码信息"""
                 page_numbers = []
-                
+
                 # 1. 优先查找带有pagination类的分页组件
                 pagination = soup.find("ul", class_="pagination")
                 if pagination:
@@ -411,29 +441,29 @@ class Hanime1API:
                         link = item.find("a", class_="page-link")
                         if not link:
                             continue
-                        
+
                         text = link.get_text().strip()
                         href = link.get("href", "")
-                        
+
                         # 从文本和链接中提取页码
                         if text.isdigit() and len(text) <= 3:
                             page_numbers.append(int(text))
-                        
+
                         page_match = self.REGEX_PAGE_NUM.search(href)
                         if page_match:
                             page_numbers.append(int(page_match.group(1)))
-                
+
                 # 2. 查找所有链接，提取更多页码信息（作为备选方案）
                 for link in soup.find_all("a", href=True):
                     href = link.get("href")
                     text = link.get_text().strip()
-                    
+
                     page_match = self.REGEX_PAGE_NUM.search(href)
                     if page_match:
                         page_numbers.append(int(page_match.group(1)))
                     elif text.isdigit() and len(text) <= 3:
                         page_numbers.append(int(text))
-                
+
                 return list(set(page_numbers))  # 去重
 
             def has_next_page_button():
@@ -554,7 +584,7 @@ class Hanime1API:
                     if title_tag:
                         full_title = title_tag.get_text(strip=True)
                         cleaned_title = self.REGEX_TITLE_CLEAN.sub("", full_title)
-                        video_info["title"] = convert(cleaned_title.strip(), "zh-cn")
+                        video_info["title"] = self._convert_to_simplified(cleaned_title.strip())
 
                 # 解析上传日期
                 if visibility_settings.get("upload_date", True):
@@ -645,7 +675,7 @@ class Hanime1API:
                         for link in tag_links:
                             tag_text = link.get_text(strip=True)
                             if tag_text and tag_text != "#" and "http" not in tag_text:
-                                tags.append(tag_text)
+                                tags.append(self._convert_to_simplified(tag_text))
                         video_info["tags"] = tags
 
                 # 解析描述
@@ -653,7 +683,7 @@ class Hanime1API:
                     description_div = soup.find("div", class_="video-caption-text")
                     if description_div:
                         description_text = description_div.get_text(strip=True)
-                        video_info["description"] = convert(description_text, "zh-cn")
+                        video_info["description"] = self._convert_to_simplified(description_text)
 
                 # 解析相关视频
                 if visibility_settings.get("related_videos", True):
@@ -681,7 +711,7 @@ class Hanime1API:
                         title = (
                             title_elem.get_text(strip=True) if title_elem else item.get("title", "")
                         )
-                        title = convert(title, "zh-cn")
+                        title = self._convert_to_simplified(title)
 
                         # 获取缩略图
                         img_tag = item.find("img")

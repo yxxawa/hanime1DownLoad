@@ -2,7 +2,9 @@
 Hanime1DL 主界面窗口
 """
 
+import ctypes
 import json
+import logging
 import multiprocessing
 import os
 import re
@@ -778,16 +780,16 @@ class Hanime1GUI(QMainWindow):
             if os.path.exists(self.settings_file):
                 with open(self.settings_file, "r", encoding="utf-8") as f:
                     return json.load(f)
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Failed to load settings: {e}")
         return self.default_settings.copy()
 
     def save_settings(self):
         try:
             with open(self.settings_file, "w", encoding="utf-8") as f:
                 json.dump(self.settings, f, ensure_ascii=False, indent=2)
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Failed to save settings: {e}")
 
     def closeEvent(self, event):
         geometry = self.geometry()
@@ -796,8 +798,8 @@ class Hanime1GUI(QMainWindow):
         self.save_settings()
         try:
             self._clear_temp_download_folder()
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Failed to clear temp folder: {e}")
         super().closeEvent(event)
 
     def apply_video_details_visibility(self):
@@ -977,13 +979,7 @@ class Hanime1GUI(QMainWindow):
                 item_text = f"[{video['video_id']}] {video['title']}"
                 item = QListWidgetItem(item_text)
 
-                if show_thumbnails and video.get("thumbnail"):
-                    # 检查缓存
-                    if video["thumbnail"] in self.thumbnail_cache:
-                        item.setIcon(QIcon(self.thumbnail_cache[video["thumbnail"]]))
-                    else:
-                        # 异步加载
-                        self._load_thumbnail_async(video["thumbnail"], item)
+                self._load_thumbnail_for_item(item, video.get("thumbnail"), show_thumbnails)
 
                 self.video_list.addItem(item)
 
@@ -1016,8 +1012,8 @@ class Hanime1GUI(QMainWindow):
                     resp = requests.get(self.url, timeout=5)
                     if resp.status_code == 200:
                         self.signals.finished.emit(resp.content)
-                except:
-                    pass
+                except Exception as e:
+                    logging.warning(f"Failed to load thumbnail: {e}")
 
         def on_loaded(data):
             # 检查设置是否仍然开启
@@ -1217,6 +1213,66 @@ class Hanime1GUI(QMainWindow):
         self.update_download_list()
         self.statusBar().showMessage(f"视频 {video_info['title'][:20]}... 已添加到下载队列")
 
+    def _format_download_item_text(self, download):
+        """格式化下载项的显示文本"""
+        label_map = {
+            "pending": "等待中",
+            "downloading": "下载中",
+            "paused": "已暂停",
+            "completed": "已完成",
+            "error": "出错",
+        }
+        base_label = label_map[download["status"]]
+        if download["status"] == "downloading":
+            base_label = f"{base_label} {int(download.get('progress', 0))}%"
+        return f"[{base_label}] [{download['video_id']}] {download['title'][:30]}"
+
+    def _load_thumbnail_for_item(self, item, thumbnail_url, show_thumbnails):
+        """为列表项加载缩略图"""
+        if show_thumbnails and thumbnail_url:
+            if thumbnail_url in self.thumbnail_cache:
+                item.setIcon(QIcon(self.thumbnail_cache[thumbnail_url]))
+            else:
+                self._load_thumbnail_async(thumbnail_url, item)
+
+    def _check_existing_file(self, download_path, filename, naming_rule, download):
+        """检查文件是否已存在，返回是否应该跳过下载"""
+        # 检查最终下载目录中是否已存在文件
+        final_file = os.path.join(download_path, filename)
+        if os.path.exists(final_file) and not self.settings.get("overwrite_existing", False):
+            self.statusBar().showMessage(f"文件 {filename} 已存在，跳过下载")
+            return True
+
+        # 检查是否存在标题相同的视频文件（考虑仅标题保存格式的情况）
+        if "{title}" in naming_rule:
+            safe_title_only = re.sub(r'[\\/:*?"<>|]', "_", download["title"][:100]).strip(" _")
+            if safe_title_only and os.path.exists(download_path):
+                for existing_file in os.listdir(download_path):
+                    if existing_file.endswith(".mp4"):
+                        existing_name = os.path.splitext(existing_file)[0]
+                        if existing_name == safe_title_only:
+                            self.statusBar().showMessage(f"标题相同的视频 {existing_file} 已存在，跳过下载")
+                            return True
+
+        # 检查是否存在视频ID相同的视频文件
+        if "{video_id}" in naming_rule or naming_rule == "{title}":
+            if os.path.exists(download_path):
+                for existing_file in os.listdir(download_path):
+                    if existing_file.endswith(".mp4") and download["video_id"] in existing_file:
+                        self.statusBar().showMessage(f"视频ID相同的视频 {existing_file} 已存在，跳过下载")
+                        return True
+
+        return False
+
+    def _ensure_progress_timer(self):
+        """确保进度条定时器已启动"""
+        if not self.progress_timer:
+            from PyQt5.QtCore import QTimer
+
+            self.progress_timer = QTimer(self)
+            self.progress_timer.timeout.connect(self.update_progress_smooth)
+            self.progress_timer.start(20)
+
     def update_download_list(self):
         self.download_list.clear()
         any_downloading = False
@@ -1226,18 +1282,7 @@ class Hanime1GUI(QMainWindow):
                 any_downloading = True
             elif download["status"] == "paused":
                 any_paused = True
-            label_map = {
-                "pending": "等待中",
-                "downloading": "下载中",
-                "paused": "已暂停",
-                "completed": "已完成",
-                "error": "出错",
-
-            }
-            base_label = label_map[download["status"]]
-            if download["status"] == "downloading":
-                base_label = f"{base_label} {int(download.get('progress', 0))}%"
-            text = f"[{base_label}] [{download['video_id']}] {download['title'][:30]}"
+            text = self._format_download_item_text(download)
             self.download_list.addItem(text)
 
         # 更新切换按钮文本: 开始 -> 暂停 -> 继续 -> 开始
@@ -1248,31 +1293,10 @@ class Hanime1GUI(QMainWindow):
         else:
             self.toggle_download_button.setText("开始下载")
 
-    def _update_toggle_button_state(self):
-        any_downloading = any(d["status"] == "downloading" for d in self.downloads)
-        any_paused = any(d["status"] == "paused" for d in self.downloads)
-        if any_downloading:
-            self.toggle_download_button.setText("暂停下载")
-        elif any_paused:
-            self.toggle_download_button.setText("继续下载")
-        else:
-            self.toggle_download_button.setText("开始下载")
-
     def _update_single_download_row_by_index(self, index):
         if 0 <= index < len(self.downloads) and index < self.download_list.count():
             d = self.downloads[index]
-            label_map = {
-                "pending": "等待中",
-                "downloading": "下载中",
-                "paused": "已暂停",
-                "completed": "已完成",
-                "error": "出错",
-
-            }
-            base_label = label_map[d["status"]]
-            if d["status"] == "downloading":
-                base_label = f"{base_label} {int(d.get('progress', 0))}%"
-            text = f"[{base_label}] [{d['video_id']}] {d['title'][:30]}"
+            text = self._format_download_item_text(d)
             item = self.download_list.item(index)
             if item:
                 item.setText(text)
@@ -1347,67 +1371,24 @@ class Hanime1GUI(QMainWindow):
                     filename_core = naming_rule.format(
                         title=safe_title, video_id=download["video_id"]
                     )
-                except Exception:
+                except Exception as e:
+                    logging.warning(f"Failed to format filename: {e}")
                     filename_core = safe_title
                 filename = f"{filename_core}.mp4"
                 download_path = self.settings.get(
                     "download_path", os.path.join(os.getcwd(), "hanimeDownload")
                 )
 
-                # 检查最终下载目录中是否已存在文件
-                final_file = os.path.join(download_path, filename)
-                if os.path.exists(final_file) and not self.settings.get(
-                    "overwrite_existing", False
-                ):
-                    self.statusBar().showMessage(f"文件 {filename} 已存在，跳过下载")
+                # 检查文件是否已存在
+                if self._check_existing_file(download_path, filename, naming_rule, download):
                     del self.downloads[index]
                     self.update_download_list()
                     self.on_start_download()
                     return
 
-                # 检查是否存在标题相同的视频文件（考虑仅标题保存格式的情况）
-                if "{title}" in naming_rule:
-                    # 获取安全标题
-                    safe_title_only = re.sub(r'[\\/:*?"<>|]', "_", download["title"][:100]).strip(
-                        " _"
-                    )
-                    if safe_title_only:
-                        # 遍历下载目录中的所有mp4文件
-                        if os.path.exists(download_path):
-                            for existing_file in os.listdir(download_path):
-                                if existing_file.endswith(".mp4"):
-                                    # 提取文件名（不含扩展名）
-                                    existing_name = os.path.splitext(existing_file)[0]
-                                    # 检查是否标题相同
-                                    if existing_name == safe_title_only:
-                                        self.statusBar().showMessage(
-                                            f"标题相同的视频 {existing_file} 已存在，跳过下载"
-                                        )
-                                        del self.downloads[index]
-                                        self.update_download_list()
-                                        self.on_start_download()
-                                        return
-
-                # 检查是否存在视频ID相同的视频文件
-                if "{video_id}" in naming_rule or naming_rule == "{title}":
-                    # 遍历下载目录中的所有mp4文件
-                    if os.path.exists(download_path):
-                        for existing_file in os.listdir(download_path):
-                            if existing_file.endswith(".mp4"):
-                                # 检查文件名中是否包含当前视频ID
-                                if download["video_id"] in existing_file:
-                                    self.statusBar().showMessage(
-                                        f"视频ID相同的视频 {existing_file} 已存在，跳过下载"
-                                    )
-                                    del self.downloads[index]
-                                    self.update_download_list()
-                                    self.on_start_download()
-                                    return
-
                 # 检查临时目录中是否存在文件（可能是未完成的下载）
                 temp_file = os.path.join(self.temp_download_dir, filename)
                 if os.path.exists(temp_file):
-                    # 检查临时文件大小是否合理
                     temp_size = os.path.getsize(temp_file)
                     if temp_size > 0:
                         self.statusBar().showMessage(f"发现未完成的下载，将尝试继续")
@@ -1451,28 +1432,19 @@ class Hanime1GUI(QMainWindow):
 
                 # 启动下载
                 try:
-                    # 如果是暂停后继续，使用现有的进度信息
-                    if download.get("progress"):
-                        self.on_download_progress_by_id(
-                            {
-                                "progress": download["progress"],
-                                "size": download.get("size", 0),
-                                "total_size": download.get("total_size", 0),
-                            },
-                            worker.video_id,
-                        )
-                    else:
-                        self.on_download_progress_by_id(
-                            {"progress": 0, "size": 0, "total_size": 0}, worker.video_id
-                        )
-                except:
-                    pass
+                    self.on_download_progress_by_id(
+                        {
+                            "progress": download.get("progress", 0),
+                            "size": download.get("size", 0),
+                            "total_size": download.get("total_size", 0),
+                        },
+                        worker.video_id,
+                    )
+                except Exception as e:
+                    logging.warning(f"Failed to send initial progress: {e}")
 
                 self.threadpool.start(worker, priority=5)
-                if download["status"] == "paused":
-                    self.statusBar().showMessage(f"继续下载视频 {download['title'][:20]}...")
-                else:
-                    self.statusBar().showMessage(f"开始下载视频 {download['title'][:20]}...")
+                self.statusBar().showMessage(f"开始下载视频 {download['title'][:20]}...")
 
     def on_download_progress_by_id(self, progress_info, video_id):
         for i, download in enumerate(self.downloads):
@@ -1485,7 +1457,6 @@ class Hanime1GUI(QMainWindow):
                     }
                 )
                 self._update_single_download_row_by_index(i)
-                self._update_toggle_button_state()
                 self.calculate_and_update_overall_progress()
                 break
 
@@ -1548,7 +1519,7 @@ class Hanime1GUI(QMainWindow):
         total_size = sum(
             d.get("total_size", 1) for d in self.downloads if d["status"] == "downloading"
         )
-        active_count = sum(1 for d in self.downloads if d["status"] == "downloading")
+        active_count = self._count_downloads_by_status("downloading")
 
         # 计算当前总速度
         total_speed = 0
@@ -1562,29 +1533,17 @@ class Hanime1GUI(QMainWindow):
             # 设置进度条状态为下载中
             self.set_progress_bar_status("downloading")
             # 启动平滑更新
-            if not self.progress_timer:
-                from PyQt5.QtCore import QTimer
-
-                self.progress_timer = QTimer(self)
-                self.progress_timer.timeout.connect(self.update_progress_smooth)
-                self.progress_timer.start(20)  # 每20ms更新一次，实现平滑动画
-
-            # 格式化速度显示
-            speed_text = (
-                f"{total_speed/1024/1024:.1f} MB/s"
-                if total_speed > 1024 * 1024
-                else f"{total_speed/1024:.1f} KB/s"
-            )
+            self._ensure_progress_timer()
 
             self.download_info.setText(
                 f"正在下载: {active_count} 个任务 | "
-                f"速度: {speed_text} | "
-                f"已完成: {total_downloaded/1024/1024:.1f}MB / {total_size/1024/1024:.1f}MB"
+                f"速度: {self._format_size(total_speed, True)} | "
+                f"已完成: {self._format_size(total_downloaded)} / {self._format_size(total_size)}"
             )
         else:
-            pending_count = sum(1 for d in self.downloads if d["status"] == "pending")
-            paused_count = sum(1 for d in self.downloads if d["status"] == "paused")
-            error_count = sum(1 for d in self.downloads if d["status"] == "error")
+            pending_count = self._count_downloads_by_status("pending")
+            paused_count = self._count_downloads_by_status("paused")
+            error_count = self._count_downloads_by_status("error")
 
             # 根据状态设置进度条颜色
             if paused_count > 0:
@@ -1595,13 +1554,7 @@ class Hanime1GUI(QMainWindow):
                 self.set_progress_bar_status("idle")
 
             self.target_progress = 0
-            # 启动平滑更新
-            if not self.progress_timer:
-                from PyQt5.QtCore import QTimer
-
-                self.progress_timer = QTimer(self)
-                self.progress_timer.timeout.connect(self.update_progress_smooth)
-                self.progress_timer.start(20)
+            self._ensure_progress_timer()
 
             status_parts = []
             if pending_count > 0:
@@ -1610,6 +1563,21 @@ class Hanime1GUI(QMainWindow):
                 status_parts.append(f"{paused_count} 个任务已暂停")
 
             self.download_info.setText(" | ".join(status_parts) if status_parts else "准备下载")
+
+    def _format_size(self, size_bytes, is_speed=False):
+        """格式化文件大小或速度显示"""
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} B{'/s' if is_speed else ''}"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes/1024:.1f} KB{'/s' if is_speed else ''}"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes/1024/1024:.1f} MB{'/s' if is_speed else ''}"
+        else:
+            return f"{size_bytes/1024/1024/1024:.1f} GB{'/s' if is_speed else ''}"
+
+    def _count_downloads_by_status(self, status):
+        """统计指定状态的下载任务数量"""
+        return sum(1 for d in self.downloads if d["status"] == status)
 
     def on_download_finished_by_id(self, video_id):
         task_index = next(
@@ -1723,9 +1691,8 @@ class Hanime1GUI(QMainWindow):
 
         # 清空active_downloads，因为所有worker都已暂停
         self.active_downloads.clear()
-
         self.update_download_list()
-        paused_count = sum(1 for d in self.downloads if d["status"] == "paused")
+        paused_count = self._count_downloads_by_status("paused")
         self.download_info.setText(f"所有下载已暂停 - 已暂停: {paused_count} 个任务")
 
     def on_resume_download(self):
@@ -1767,16 +1734,14 @@ class Hanime1GUI(QMainWindow):
 
     def _ensure_temp_download_dir(self):
         try:
-            import ctypes
-            
             os.makedirs(self.temp_download_dir, exist_ok=True)
             if os.name == "nt":
                 FILE_ATTRIBUTE_HIDDEN = 0x02
                 ctypes.windll.kernel32.SetFileAttributesW(
                     self.temp_download_dir, FILE_ATTRIBUTE_HIDDEN
                 )
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Failed to create temp download dir: {e}")
 
     def _clear_temp_download_folder(self):
         try:
@@ -1788,10 +1753,10 @@ class Hanime1GUI(QMainWindow):
                             os.remove(path)
                         elif os.path.isdir(path):
                             shutil.rmtree(path)
-                    except:
-                        pass
-        except:
-            pass
+                    except Exception as e:
+                        logging.warning(f"Failed to remove {path}: {e}")
+        except Exception as e:
+            logging.warning(f"Failed to clear temp folder: {e}")
 
 
 
@@ -1812,27 +1777,6 @@ class Hanime1GUI(QMainWindow):
             return False
         self._last_action_time[name] = now
         return True
-
-    def _probe_content_length(self, url):
-        try:
-            resp = requests.head(
-                url,
-                headers=self.api.session.headers,
-                cookies=self.api.session.cookies.get_dict(),
-                timeout=10,
-            )
-            cl = resp.headers.get("content-length")
-            return int(cl) if cl else 0
-        except:
-            return 0
-
-    def _has_enough_space(self, required_bytes):
-        try:
-            usage = shutil.disk_usage(self.temp_download_dir)
-            margin = 100 * 1024 * 1024
-            return usage.free >= required_bytes + margin
-        except:
-            return True
 
     def show_video_context_menu(self, pos):
         if self.video_list.selectedItems():
@@ -1885,7 +1829,8 @@ class Hanime1GUI(QMainWindow):
                 with open(self.favorites_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.favorites = {"默认收藏夹": data} if isinstance(data, list) else data
-            except:
+            except Exception as e:
+                logging.warning(f"Failed to load favorites: {e}")
                 self.favorites = {"默认收藏夹": []}
         else:
             self.favorites = {"默认收藏夹": []}
@@ -1895,8 +1840,8 @@ class Hanime1GUI(QMainWindow):
         try:
             with open(self.favorites_file, "w", encoding="utf-8") as f:
                 json.dump(self.favorites, f, ensure_ascii=False, indent=2)
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Failed to save favorites: {e}")
 
     def update_favorites_list(self):
         if hasattr(self, "_original_favorites"):
@@ -1913,11 +1858,7 @@ class Hanime1GUI(QMainWindow):
         for fav in self.favorites[folder]:
             item = QListWidgetItem(f"[{fav['video_id']}] {fav['title']}")
 
-            if show_thumbnails and fav.get("thumbnail"):
-                if fav["thumbnail"] in self.thumbnail_cache:
-                    item.setIcon(QIcon(self.thumbnail_cache[fav["thumbnail"]]))
-                else:
-                    self._load_thumbnail_async(fav["thumbnail"], item)
+            self._load_thumbnail_for_item(item, fav.get("thumbnail"), show_thumbnails)
 
             self.favorites_list.addItem(item)
 
@@ -2056,11 +1997,7 @@ class Hanime1GUI(QMainWindow):
             if not search or search in fav["title"].lower() or search in fav.get("video_id", ""):
                 item = QListWidgetItem(f"[{fav['video_id']}] {fav['title']}")
 
-                if show_thumbnails and fav.get("thumbnail"):
-                    if fav["thumbnail"] in self.thumbnail_cache:
-                        item.setIcon(QIcon(self.thumbnail_cache[fav["thumbnail"]]))
-                    else:
-                        self._load_thumbnail_async(fav["thumbnail"], item)
+                self._load_thumbnail_for_item(item, fav.get("thumbnail"), show_thumbnails)
 
                 self.favorites_list.addItem(item)
 
@@ -2087,8 +2024,8 @@ class Hanime1GUI(QMainWindow):
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
-            except:
-                pass
+            except Exception as e:
+                logging.warning(f"Failed to export favorites: {e}")
 
     def on_import_favorites(self):
         path, _ = QFileDialog.getOpenFileName(self, "导入", "", "JSON (*.json)")
@@ -2114,8 +2051,8 @@ class Hanime1GUI(QMainWindow):
                         self.favorites[name] = vids
                 self.save_favorites()
                 self.update_folder_combobox()
-            except:
-                pass
+            except Exception as e:
+                logging.warning(f"Failed to import favorites: {e}")
 
     def show_favorite_context_menu(self, pos):
         if self.favorites_list.selectedItems():
@@ -2213,32 +2150,6 @@ class Hanime1GUI(QMainWindow):
                 lambda: self.on_remove_selected_downloads(selected_items)
             )
             menu.exec_(self.download_list.viewport().mapToGlobal(pos))
-
-    def on_pause_download_from_menu(self, item):
-        idx = self.download_list.row(item)
-        vid = self.downloads[idx]["video_id"]
-        if vid in self.active_downloads:
-            self.active_downloads[vid].pause()
-            self.downloads[idx]["status"] = "paused"
-            self.update_download_list()
-
-    def on_resume_download_from_menu(self, item):
-        idx = self.download_list.row(item)
-        vid = self.downloads[idx]["video_id"]
-        if vid in self.active_downloads:
-            self.active_downloads[vid].resume()
-            self.downloads[idx]["status"] = "downloading"
-            self.update_download_list()
-
-
-
-    def on_remove_from_download_queue(self, item):
-        idx = self.download_list.row(item)
-        vid = self.downloads[idx]["video_id"]
-        if vid in self.active_downloads:
-            del self.active_downloads[vid]
-        self.downloads.pop(idx)
-        self.update_download_list()
 
     def on_pause_selected_downloads(self, items):
         for item in items:

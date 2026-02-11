@@ -3,7 +3,10 @@ Hanime1DL 后台任务工作线程类
 """
 
 import concurrent.futures
+import glob
+import logging
 import os
+import shutil
 import threading
 import time
 
@@ -376,32 +379,24 @@ class DownloadWorker(QRunnable):
         with open(self.full_path, "wb") as f:
             for temp_file in temp_files:
                 with open(temp_file, "rb") as tf:
-                    while True:
-                        chunk = tf.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        f.write(chunk)
+                    shutil.copyfileobj(tf, f, length=1024 * 1024)
 
     def _cleanup_temp_files(self, temp_files):
-        import glob
-
         for temp_file in temp_files:
-            # 处理通配符模式
             if "*" in temp_file:
                 files = glob.glob(temp_file)
                 for file in files:
-                    if os.path.exists(file):
-                        try:
-                            os.remove(file)
-                        except:
-                            pass
+                    self._safe_remove(file)
             else:
-                # 处理普通文件路径
-                if os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except:
-                        pass
+                self._safe_remove(temp_file)
+
+    def _safe_remove(self, file_path):
+        """安全删除文件"""
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            logging.warning(f"Failed to remove {file_path}: {e}")
 
     def _should_update_progress(self, current_progress):
         current_time = time.time()
@@ -423,5 +418,3 @@ class DownloadWorker(QRunnable):
     def resume(self):
         self.is_paused = False
         self.pause_event.set()
-
-

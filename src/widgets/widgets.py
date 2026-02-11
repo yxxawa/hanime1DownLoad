@@ -2,6 +2,8 @@
 Custom widgets for Hanime1DL
 """
 
+import logging
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
@@ -15,7 +17,6 @@ from PyQt5.QtWidgets import (
     QMenu,
     QPushButton,
     QSizePolicy,
-    QSpacerItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -124,16 +125,15 @@ class PageNavigationWidget(QWidget):
 
     def update_page_buttons(self):
         """更新页码按钮"""
-        # 清空现有按钮
-        for i in reversed(range(self.pages_layout.count())):
-            widget = self.pages_layout.itemAt(i).widget()
-            if widget:
-                widget.deleteLater()
-        # 清空所有间隔项
+        # 清空现有按钮和间隔项
         for i in reversed(range(self.pages_layout.count())):
             item = self.pages_layout.itemAt(i)
-            if isinstance(item, QSpacerItem):
-                self.pages_layout.removeItem(item)
+            if item:
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
+                else:
+                    self.pages_layout.removeItem(item)
 
         # 计算显示的页码范围
         start_page = max(1, self.current_page - self.max_visible_pages // 2)
@@ -303,8 +303,8 @@ class ChineseLineEdit(QLineEdit):
         if self.hasSelectedText():
             try:
                 self.backspace()
-            except:
-                pass
+            except Exception as e:
+                logging.warning(f"Failed to delete selected text: {e}")
         else:
             try:
                 if hasattr(QLineEdit, "del_"):
@@ -314,8 +314,8 @@ class ChineseLineEdit(QLineEdit):
                     if cursor < len(text):
                         self.setText(text[:cursor] + text[cursor + 1 :])
                         self.setCursorPosition(cursor)
-            except:
-                pass
+            except Exception as e:
+                logging.warning(f"Failed to delete character: {e}")
 
 
 class ChineseTextEdit(QTextEdit):
