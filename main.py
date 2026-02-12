@@ -169,8 +169,13 @@ def _launch_application(app, show_announcements):
 def main():
     app = QApplication(sys.argv)
     
+    # 确保config文件夹存在
+    config_dir = os.path.join(os.getcwd(), "config")
+    if not os.path.exists(config_dir):
+        os.makedirs(config_dir)
+    
     # 检查settings.json文件是否存在
-    settings_file = os.path.join(os.getcwd(), "settings.json")
+    settings_file = os.path.join(config_dir, "settings.json")
     show_announcements = True  # 默认显示公告
     
     # 如果settings.json文件存在，加载设置

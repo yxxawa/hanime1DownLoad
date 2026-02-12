@@ -67,8 +67,8 @@ class DownloadWorker(QRunnable):
 
     # 常量定义
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    CHUNK_SIZE = 131072  # 下载块大小128KB，减少I/O操作次数
-    MIN_CHUNK_SIZE = 1024 * 1024  # 最小块大小(1MB)，小于此值使用单线程
+    CHUNK_SIZE = 1048576  # 下载块大小1MB，减少I/O操作次数和锁竞争
+    MIN_CHUNK_SIZE = 5 * 1024 * 1024  # 最小块大小(5MB)，小于此值使用单线程
 
     def __init__(
         self,
@@ -108,8 +108,8 @@ class DownloadWorker(QRunnable):
         # 进度更新节流机制
         self.last_progress_update = 0
         self.last_progress_value = 0
-        self.progress_update_interval = 0.1
-        self.progress_update_threshold = 1.0
+        self.progress_update_interval = 0.2
+        self.progress_update_threshold = 2.0
 
         # 下载速度计算
         self.start_time = time.time()
@@ -265,6 +265,7 @@ class DownloadWorker(QRunnable):
 
         # 从已下载的位置继续下载
         current_downloaded = start_pos
+        local_downloaded = 0  # 本地计数器，减少锁操作
 
         with self.session.get(self.url, headers=headers, stream=True, timeout=(5, 30)) as r:
             r.raise_for_status()
@@ -275,35 +276,68 @@ class DownloadWorker(QRunnable):
                     if chunk:
                         f.write(chunk)
                         current_downloaded += len(chunk)
-                        progress = (
-                            (current_downloaded / file_total_size) * 100
-                            if file_total_size > 0
-                            else 0
-                        )
-
-                        current_time = time.time()
-                        time_diff = current_time - self.last_speed_update
-                        if time_diff >= 1.0:
-                            bytes_diff = current_downloaded - self.last_downloaded_size
-                            self.current_speed = bytes_diff / time_diff
-                            self.last_speed_update = current_time
-                            self.last_downloaded_size = current_downloaded
-
-                        if self._should_update_progress(progress):
-                            self.signals.progress.emit(
-                                {
-                                    "progress": progress,
-                                    "filename": self.filename,
-                                    "size": current_downloaded,
-                                    "total_size": file_total_size,
-                                    "speed": self.current_speed,
-                                }
+                        local_downloaded += len(chunk)
+                        
+                        # 减少进度更新频率，只在下载了1MB后才更新
+                        if local_downloaded >= 1048576:
+                            progress = (
+                                (current_downloaded / file_total_size) * 100
+                                if file_total_size > 0
+                                else 0
                             )
+
+                            current_time = time.time()
+                            time_diff = current_time - self.last_speed_update
+                            if time_diff >= 1.0:
+                                bytes_diff = current_downloaded - self.last_downloaded_size
+                                self.current_speed = bytes_diff / time_diff
+                                self.last_speed_update = current_time
+                                self.last_downloaded_size = current_downloaded
+
+                            if self._should_update_progress(progress):
+                                self.signals.progress.emit(
+                                    {
+                                        "progress": progress,
+                                        "filename": self.filename,
+                                        "size": current_downloaded,
+                                        "total_size": file_total_size,
+                                        "speed": self.current_speed,
+                                    }
+                                )
+                            local_downloaded = 0
+                
+                # 更新剩余的本地计数
+                if local_downloaded > 0:
+                    progress = (
+                        (current_downloaded / file_total_size) * 100
+                        if file_total_size > 0
+                        else 0
+                    )
+
+                    current_time = time.time()
+                    time_diff = current_time - self.last_speed_update
+                    if time_diff >= 1.0:
+                        bytes_diff = current_downloaded - self.last_downloaded_size
+                        self.current_speed = bytes_diff / time_diff
+                        self.last_speed_update = current_time
+                        self.last_downloaded_size = current_downloaded
+
+                    if self._should_update_progress(progress):
+                        self.signals.progress.emit(
+                            {
+                                "progress": progress,
+                                "filename": self.filename,
+                                "size": current_downloaded,
+                                "total_size": file_total_size,
+                                "speed": self.current_speed,
+                            }
+                        )
 
     def _download_chunk(self, index, range_tuple, file_total_size, downloaded_size_container):
         start, end = range_tuple
         temp_file_path = f"{self.full_path}.part{index}"
         downloaded_chunk_size = 0
+        local_downloaded = 0  # 线程本地计数器，减少锁竞争
         max_retries = 3
 
         # 检查现有分块文件大小
@@ -313,6 +347,7 @@ class DownloadWorker(QRunnable):
 
         # 计算实际的开始位置
         actual_start = start + existing_size
+        local_downloaded = existing_size
 
         # 如果已经下载完成，直接返回
         if actual_start >= end:
@@ -337,8 +372,14 @@ class DownloadWorker(QRunnable):
                             if chunk:
                                 f.write(chunk)
                                 downloaded_chunk_size += len(chunk)
-                                with self.progress_lock:
-                                    downloaded_size_container[0] += len(chunk)
+                                local_downloaded += len(chunk)
+                                
+                                # 减少锁操作频率，只在下载了1MB后才更新全局计数器
+                                if local_downloaded >= 1048576:
+                                    with self.progress_lock:
+                                        downloaded_size_container[0] += local_downloaded
+                                    local_downloaded = 0
+                                    
                                     current_progress = (
                                         downloaded_size_container[0] / file_total_size
                                     ) * 100
@@ -363,6 +404,36 @@ class DownloadWorker(QRunnable):
                                                 "speed": self.current_speed,
                                             }
                                         )
+                        
+                        # 更新剩余的本地计数
+                        if local_downloaded > 0:
+                            with self.progress_lock:
+                                downloaded_size_container[0] += local_downloaded
+                                
+                                current_progress = (
+                                    downloaded_size_container[0] / file_total_size
+                                ) * 100
+
+                                current_time = time.time()
+                                time_diff = current_time - self.last_speed_update
+                                if time_diff >= 1.0:
+                                    bytes_diff = (
+                                        downloaded_size_container[0] - self.last_downloaded_size
+                                    )
+                                    self.current_speed = bytes_diff / time_diff
+                                    self.last_speed_update = current_time
+                                    self.last_downloaded_size = downloaded_size_container[0]
+
+                                if self._should_update_progress(current_progress):
+                                    self.signals.progress.emit(
+                                        {
+                                            "progress": current_progress,
+                                            "filename": self.filename,
+                                            "size": downloaded_size_container[0],
+                                            "total_size": file_total_size,
+                                            "speed": self.current_speed,
+                                        }
+                                    )
                     return {"size": downloaded_chunk_size}
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -370,6 +441,7 @@ class DownloadWorker(QRunnable):
                     with self.progress_lock:
                         downloaded_size_container[0] -= downloaded_chunk_size
                     downloaded_chunk_size = 0
+                    local_downloaded = 0
                     continue
                 else:
                     raise e

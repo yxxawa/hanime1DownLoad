@@ -78,7 +78,7 @@ class Hanime1API:
                 "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
             ),
             "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Encoding": "identity",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
         }
@@ -127,11 +127,18 @@ class Hanime1API:
         return (query, page, filter_str)
 
     def save_session(self):
-        """保存session信息和请求头到settings.json文件"""
+        """保存session信息和请求头到config/settings.json文件"""
         try:
+            # 确保config目录存在
+            config_dir = os.path.join(os.getcwd(), "config")
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir)
+            
+            # 使用config目录中的settings.json文件
+            settings_file = os.path.join(config_dir, "settings.json")
             settings = {}
-            if os.path.exists("settings.json"):
-                with open("settings.json", "r", encoding="utf-8") as f:
+            if os.path.exists(settings_file):
+                with open(settings_file, "r", encoding="utf-8") as f:
                     settings = json.load(f)
 
             cookie_dict = {}
@@ -148,18 +155,25 @@ class Hanime1API:
             settings["headers"] = self.headers
             settings["session"] = {"cookies": cookie_dict, "timestamp": time.time()}
 
-            with open("settings.json", "w", encoding="utf-8") as f:
+            with open(settings_file, "w", encoding="utf-8") as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logging.warning(f"Failed to save session: {e}")
 
     def load_session(self):
-        """从settings.json加载session信息和请求头"""
+        """从config/settings.json加载session信息和请求头"""
         try:
-            if not os.path.exists("settings.json"):
+            # 确保config目录存在
+            config_dir = os.path.join(os.getcwd(), "config")
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir)
+            
+            # 使用config目录中的settings.json文件
+            settings_file = os.path.join(config_dir, "settings.json")
+            if not os.path.exists(settings_file):
                 return
 
-            with open("settings.json", "r", encoding="utf-8") as f:
+            with open(settings_file, "r", encoding="utf-8") as f:
                 settings = json.load(f)
 
             # 加载请求头
@@ -180,8 +194,7 @@ class Hanime1API:
                                 domain=cookie_info.get("domain", ".hanime1.me"),
                                 path=cookie_info.get("path", "/"),
                                 expires=cookie_info.get("expires"),
-                                secure=cookie_info.get("secure", True),
-                                httponly=cookie_info.get("httponly", False),
+                                secure=cookie_info.get("secure", True)
                             )
                         else:
                             # 旧格式：直接是值
@@ -195,7 +208,9 @@ class Hanime1API:
             logging.warning(f"Failed to load session: {e}")
             # 如果加载失败，尝试清理旧的settings.json文件
             try:
-                os.rename("settings.json", "settings.json.backup")
+                config_dir = os.path.join(os.getcwd(), "config")
+                settings_file = os.path.join(config_dir, "settings.json")
+                os.rename(settings_file, os.path.join(config_dir, "settings.json.backup"))
             except Exception as e:
                 logging.warning(f"Failed to backup settings.json: {e}")
 
@@ -211,8 +226,7 @@ class Hanime1API:
                 cf_clearance_value,
                 domain=".hanime1.me",
                 path="/",
-                secure=True,
-                httponly=True,
+                secure=True
             )
             # 保存session，以便下次使用
             self.save_session()
@@ -550,6 +564,8 @@ class Hanime1API:
                 "title": True,
                 "upload_date": True,
                 "likes": True,
+                "duration": True,
+                "views": True,
                 "tags": True,
                 "cover": True,
                 "description": True,
@@ -572,6 +588,8 @@ class Hanime1API:
                     "description": "",
                     "upload_date": "",
                     "likes": "",
+                    "duration": "",
+                    "views": "",
                     "video_sources": [],
                     "tags": [],
                     "series": [],
@@ -603,6 +621,24 @@ class Hanime1API:
                         match = self.REGEX_LIKE.search(like_text)
                         if match:
                             video_info["likes"] = f"{match.group(1)}% ({match.group(2)}票)"
+
+                # 解析视频时长
+                if visibility_settings.get("duration", True):
+                    duration_div = soup.find("div", class_="card-mobile-duration")
+                    if duration_div:
+                        video_info["duration"] = duration_div.get_text(strip=True)
+
+                # 解析观看次数
+                if visibility_settings.get("views", True):
+                    panel = soup.find("div", class_="video-description-panel")
+                    if panel:
+                        panel_text = panel.get_text()
+                        panel_text = self._convert_to_simplified(panel_text)
+                        view_match = re.search(r'观看次数[：:]\s*([\d.]+[万]?[次]?)', panel_text)
+                        if view_match:
+                            video_info["views"] = view_match.group(1)
+                        else:
+                            video_info["views"] = "-"
 
                 # 解析视频源（即使不显示也要解析，因为下载需要）
                 video_tag = soup.find("video", {"id": "player"})

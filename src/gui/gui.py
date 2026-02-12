@@ -16,15 +16,17 @@ import datetime
 import requests
 import sip
 from PyQt5.QtCore import (
-    QEvent,
     QObject,
     QRectF,
     QRunnable,
     QSize,
     Qt,
     QThreadPool,
+    QTimer,
+    QUrl,
     pyqtSignal,
     pyqtSlot,
+    QEvent,
 )
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
@@ -50,6 +52,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
+from PyQt5.QtMultimediaWidgets import QVideoWidget
 
 from src.api.hanime1_api import Hanime1API
 from src.dialogs.dialogs import FilterDialog, SettingsDialog
@@ -73,8 +77,16 @@ class Hanime1GUI(QMainWindow):
         max_threads = min(cpu_count * 3, 16)
         self.threadpool.setMaxThreadCount(max_threads)
 
+        # 确保config文件夹存在
+        self.config_dir = os.path.join(os.getcwd(), "config")
+        if not os.path.exists(self.config_dir):
+            os.makedirs(self.config_dir)
+        
+        # 迁移旧配置文件到config文件夹
+        self._migrate_old_config_files()
+        
         # 初始化设置
-        self.settings_file = os.path.join(os.getcwd(), "settings.json")
+        self.settings_file = os.path.join(self.config_dir, "settings.json")
         self.default_settings = {
             "download_mode": "multi_thread",
             "num_threads": 4,
@@ -95,6 +107,8 @@ class Hanime1GUI(QMainWindow):
                 "title": True,
                 "upload_date": True,
                 "likes": True,
+                "views": True,
+                "duration": True,
                 "tags": True,
                 "cover": True,
                 "description": False,
@@ -122,20 +136,27 @@ class Hanime1GUI(QMainWindow):
 
         self.current_search_results = []
         self.current_video_info = None
+        self.current_video_id = None  # 跟踪当前加载的视频ID
         self.downloads = []
         self.active_downloads = {}
         self.current_cover_url = ""
         self.thumbnail_cache = {}  # 缩略图缓存
         self._op_lock = threading.Lock()
         self._last_action_time = {}
+        self.is_loading_video_info = False  # 防止重复加载视频信息
+
+        # 视频播放器相关属性
+        self.media_player = QMediaPlayer(self, QMediaPlayer.VideoSurface)
+        self.video_widget = QVideoWidget()
+        self.is_playing = False
 
         # 初始化数据结构
         self.favorites = {}
         self.current_favorite_folder = "默认收藏夹"
-        self.favorites_file = os.path.join(os.getcwd(), "favorites.json")
+        self.favorites_file = os.path.join(self.config_dir, "favorites.json")
 
         self.download_history = []
-        self.history_file = os.path.join(os.getcwd(), "download_history.json")
+        self.history_file = os.path.join(self.config_dir, "download_history.json")
         self.temp_download_dir = os.path.join(os.getcwd(), ".HDDownload")
         self._ensure_temp_download_dir()
 
@@ -679,6 +700,16 @@ class Hanime1GUI(QMainWindow):
         self.info_form.addRow(likes_tag, self.likes_label)
         self.info_rows["likes"] = (likes_tag, self.likes_label)
 
+        self.views_label = QLabel("-")
+        views_tag = QLabel("观看次数:")
+        self.info_form.addRow(views_tag, self.views_label)
+        self.info_rows["views"] = (views_tag, self.views_label)
+
+        self.duration_label = QLabel("-")
+        duration_tag = QLabel("时长:")
+        self.info_form.addRow(duration_tag, self.duration_label)
+        self.info_rows["duration"] = (duration_tag, self.duration_label)
+
         self.tags_label = QLabel("-")
         self.tags_label.setWordWrap(True)
         tags_tag = QLabel("标签:")
@@ -775,6 +806,23 @@ class Hanime1GUI(QMainWindow):
         parent_layout.addWidget(download_group)
 
     # 业务逻辑方法 (保持原逻辑不变，仅更新引用)
+    def _migrate_old_config_files(self):
+        """迁移旧配置文件到config文件夹"""
+        old_files = {
+            "settings.json": os.path.join(self.config_dir, "settings.json"),
+            "favorites.json": os.path.join(self.config_dir, "favorites.json"),
+            "download_history.json": os.path.join(self.config_dir, "download_history.json")
+        }
+        
+        for old_filename, new_path in old_files.items():
+            old_path = os.path.join(os.getcwd(), old_filename)
+            if os.path.exists(old_path) and not os.path.exists(new_path):
+                try:
+                    shutil.move(old_path, new_path)
+                    logging.info(f"已迁移配置文件: {old_filename} -> config/{old_filename}")
+                except Exception as e:
+                    logging.warning(f"迁移配置文件失败 {old_filename}: {e}")
+    
     def load_settings(self):
         try:
             if os.path.exists(self.settings_file):
@@ -796,17 +844,36 @@ class Hanime1GUI(QMainWindow):
         self.settings["window_size"] = {"width": geometry.width(), "height": geometry.height()}
         self.settings["window_pos"] = {"x": geometry.x(), "y": geometry.y()}
         self.save_settings()
+        
+        # 停止所有正在运行的下载任务
+        for vid, worker in list(self.active_downloads.items()):
+            if hasattr(worker, "pause"):
+                worker.pause()
+        
+        # 等待线程池中的任务完成（最多等待3秒）
+        self.threadpool.clear()  # 清除所有待处理的任务
+        self.threadpool.waitForDone(3000)  # 等待正在运行的任务完成，最多3秒
+        
+        # 关闭API会话，释放连接
+        if hasattr(self.api, "session"):
+            try:
+                self.api.session.close()
+            except Exception as e:
+                logging.warning(f"Failed to close API session: {e}")
+        
+        # 清理临时下载文件夹
         try:
             self._clear_temp_download_folder()
         except Exception as e:
             logging.warning(f"Failed to clear temp folder: {e}")
+        
         super().closeEvent(event)
 
     def apply_video_details_visibility(self):
         """应用详细信息显示设置"""
         visibility = self.settings.get("video_details_visibility", {})
-
-        # 处理表单行
+        
+        # 处理表单行 - 使用setVisible而不是重新添加/删除行
         for key, (tag, widget) in self.info_rows.items():
             is_visible = visibility.get(key, True)
             tag.setVisible(is_visible)
@@ -1095,10 +1162,20 @@ class Hanime1GUI(QMainWindow):
             self.get_video_info(video["video_id"], video["title"])
 
     def get_video_info(self, video_id, search_title=None):
+        if self.is_loading_video_info:
+            return
+        
+        if self.current_video_id == video_id:
+            return
+        
+        self.current_video_id = video_id
+        self.is_loading_video_info = True
         self.statusBar().showMessage(f"正在获取视频 {video_id} 的信息...")
         self.title_label.setText("加载中...")
         self.upload_date_label.setText("加载中...")
         self.likes_label.setText("加载中...")
+        self.views_label.setText("加载中...")
+        self.duration_label.setText("加载中...")
         self.tags_label.setText("加载中...")
         self.description_text.setText("加载中...")
         self.current_cover_url = ""
@@ -1123,6 +1200,8 @@ class Hanime1GUI(QMainWindow):
             self.title_label.setText(video_info["title"])
             self.upload_date_label.setText(video_info["upload_date"])
             self.likes_label.setText(video_info["likes"])
+            self.views_label.setText(video_info.get("views", "-"))
+            self.duration_label.setText(video_info.get("duration", ""))
 
             # 清理标签中的 add/remove 并去重
             cleaned_tags = []
@@ -1162,9 +1241,12 @@ class Hanime1GUI(QMainWindow):
             self.statusBar().showMessage(f"视频 {video_id} 信息加载完成")
         else:
             self.statusBar().showMessage(f"无法获取视频 {video_id} 的信息")
+        
+        self.is_loading_video_info = False
 
     def on_video_info_error(self, error, video_id):
         self.statusBar().showMessage(f"获取视频 {video_id} 信息出错: {error}")
+        self.is_loading_video_info = False
 
     def update_source_links(self, video_sources):
         for i in reversed(range(self.source_links_layout.count())):
@@ -1184,6 +1266,170 @@ class Hanime1GUI(QMainWindow):
     def on_download_button_clicked(self, source):
         if self.current_video_info:
             self.add_to_download_queue(self.current_video_info, source)
+
+    def on_play_button_clicked(self, source):
+        """播放视频"""
+        url = source['url']
+        self.play_video(url)
+
+    def play_video(self, url, mute=False):
+        """播放视频的核心方法"""
+        try:
+            # 停止当前播放
+            if self.media_player.state() == QMediaPlayer.PlayingState:
+                self.media_player.stop()
+            
+            # 设置视频源
+            media_content = QMediaContent(QUrl(url))
+            self.media_player.setMedia(media_content)
+            
+            # 设置初始音量
+            if mute:
+                self.media_player.setVolume(0)
+            else:
+                self.media_player.setVolume(100)
+            
+            # 创建视频播放窗口
+            self.video_window = QWidget()
+            self.video_window.setWindowTitle("视频预览")
+            self.video_window.resize(800, 600)
+            
+            # 设置布局
+            layout = QVBoxLayout()
+            layout.setContentsMargins(0, 0, 0, 0)  # 移除边距
+            
+            # 添加视频播放部件
+            self.video_widget = QVideoWidget()
+            layout.addWidget(self.video_widget)  # 让视频控件占满整个窗口
+            
+            # 添加加载动画
+            
+            # 创建加载动画部件
+            self.loading_widget = QWidget(self.video_widget)
+            loading_layout = QVBoxLayout(self.loading_widget)
+            loading_layout.setContentsMargins(0, 0, 0, 0)
+            loading_layout.setAlignment(Qt.AlignCenter)
+            
+            self.loading_label = QLabel("加载中")
+            self.loading_label.setAlignment(Qt.AlignCenter)
+            self.loading_label.setStyleSheet("font-size: 16px;")
+            loading_layout.addWidget(self.loading_label)
+            
+            self.loading_widget.setGeometry(self.video_widget.rect())
+            self.loading_widget.show()
+            
+            # 启动加载动画
+            self.loading_dots = 0
+            self.loading_timer = QTimer()
+            self.loading_timer.timeout.connect(self.update_loading_animation)
+            self.loading_timer.start(500)  # 每500毫秒更新一次
+            
+            self.video_window.setLayout(layout)
+            
+            # 设置视频输出
+            self.media_player.setVideoOutput(self.video_widget)
+            
+            # 显示窗口并开始播放
+            self.video_window.show()
+            self.media_player.play()
+            
+            # 连接信号
+            self.media_player.stateChanged.connect(self.on_media_state_changed)
+            self.media_player.error.connect(self.on_media_error)
+            
+            # 移除时间限制，允许一直预览
+            self.statusBar().showMessage("视频预览中...")
+            
+        except Exception as e:
+            self.statusBar().showMessage(f"播放视频出错: {str(e)}")
+            QMessageBox.warning(self, "播放错误", f"无法播放视频: {str(e)}")
+
+    def on_media_error(self, error):
+        """媒体错误处理"""
+        error_string = self.media_player.errorString()
+        self.statusBar().showMessage(f"播放错误: {error_string}")
+        QMessageBox.warning(self, "播放错误", f"播放视频时出错: {error_string}")
+
+    def on_play_pause_toggled(self):
+        """切换播放/暂停状态"""
+        if self.media_player.state() == QMediaPlayer.PlayingState:
+            self.media_player.pause()
+            self.play_pause_btn.setText("播放")
+        else:
+            self.media_player.play()
+            self.play_pause_btn.setText("暂停")
+
+    def on_media_state_changed(self, state):
+        """媒体状态变化处理"""
+        if state == QMediaPlayer.PlayingState:
+            self.is_playing = True
+            if hasattr(self, 'play_pause_btn'):
+                self.play_pause_btn.setText("暂停")
+            # 视频开始播放，隐藏加载动画
+            if hasattr(self, 'loading_widget'):
+                self.loading_widget.hide()
+            if hasattr(self, 'loading_timer'):
+                self.loading_timer.stop()
+        elif state == QMediaPlayer.PausedState:
+            self.is_playing = False
+            if hasattr(self, 'play_pause_btn'):
+                self.play_pause_btn.setText("播放")
+        elif state == QMediaPlayer.StoppedState:
+            self.is_playing = False
+            if hasattr(self, 'play_pause_btn'):
+                self.play_pause_btn.setText("播放")
+
+    def update_loading_animation(self):
+        """更新加载动画"""
+        if hasattr(self, 'loading_label') and hasattr(self, 'loading_dots'):
+            self.loading_dots = (self.loading_dots + 1) % 4
+            dots = "." * self.loading_dots
+            self.loading_label.setText(f"加载中{dots}")
+
+    def on_media_position_changed(self, position):
+        """媒体位置变化处理"""
+        if hasattr(self, 'progress_bar') and hasattr(self, 'media_player'):
+            duration = self.media_player.duration()
+            if duration > 0:
+                percentage = int((position / duration) * 100)
+                self.progress_bar.setValue(percentage)
+                
+                # 更新当前时间显示
+                current_time = self.format_time(position)
+                if hasattr(self, 'current_time_label'):
+                    self.current_time_label.setText(current_time)
+
+    def on_media_duration_changed(self, duration):
+        """媒体时长变化处理"""
+        if hasattr(self, 'total_time_label'):
+            total_time = self.format_time(duration)
+            self.total_time_label.setText(total_time)
+
+    def on_progress_slider_moved(self, position):
+        """进度条拖动时处理"""
+        # 拖动时可以显示预览时间
+        if hasattr(self, 'media_player'):
+            duration = self.media_player.duration()
+            if duration > 0:
+                current_time = self.format_time((position / 100) * duration)
+                if hasattr(self, 'current_time_label'):
+                    self.current_time_label.setText(current_time)
+
+    def on_progress_slider_released(self):
+        """进度条释放时处理"""
+        if hasattr(self, 'progress_bar') and hasattr(self, 'media_player'):
+            position = self.progress_bar.value()
+            duration = self.media_player.duration()
+            if duration > 0:
+                new_position = int((position / 100) * duration)
+                self.media_player.setPosition(new_position)
+
+    def format_time(self, milliseconds):
+        """格式化时间为 MM:SS 格式"""
+        seconds = int(milliseconds / 1000)
+        minutes = seconds // 60
+        seconds = seconds % 60
+        return f"{minutes:02d}:{seconds:02d}"
 
     def add_to_download_queue(self, video_info, source):
         safe_title = (
@@ -1267,8 +1513,6 @@ class Hanime1GUI(QMainWindow):
     def _ensure_progress_timer(self):
         """确保进度条定时器已启动"""
         if not self.progress_timer:
-            from PyQt5.QtCore import QTimer
-
             self.progress_timer = QTimer(self)
             self.progress_timer.timeout.connect(self.update_progress_smooth)
             self.progress_timer.start(20)
@@ -1779,24 +2023,44 @@ class Hanime1GUI(QMainWindow):
         return True
 
     def show_video_context_menu(self, pos):
-        if self.video_list.selectedItems():
+        selected_items = self.video_list.selectedItems()
+        if selected_items:
             menu = QMenu(self)
+            # 只有单选时才显示预览选项
+            if len(selected_items) == 1:
+                menu.addAction("预览").triggered.connect(
+                    lambda: self.on_preview_from_menu(selected_items)
+                )
+                menu.addAction("静音预览").triggered.connect(
+                    lambda: self.on_mute_preview_from_menu(selected_items)
+                )
+                menu.addSeparator()
             menu.addAction("下载").triggered.connect(
-                lambda: self.on_download_from_menu(self.video_list.selectedItems())
+                lambda: self.on_download_from_menu(selected_items)
             )
             menu.addAction("添加到收藏夹").triggered.connect(
-                lambda: self.on_add_to_favorites_from_menu(self.video_list.selectedItems())
+                lambda: self.on_add_to_favorites_from_menu(selected_items)
             )
             menu.exec_(self.video_list.viewport().mapToGlobal(pos))
 
     def show_related_video_context_menu(self, pos):
-        if self.related_list.selectedItems():
+        selected_items = self.related_list.selectedItems()
+        if selected_items:
             menu = QMenu(self)
+            # 只有单选时才显示预览选项
+            if len(selected_items) == 1:
+                menu.addAction("预览").triggered.connect(
+                    lambda: self.on_preview_from_menu(selected_items)
+                )
+                menu.addAction("静音预览").triggered.connect(
+                    lambda: self.on_mute_preview_from_menu(selected_items)
+                )
+                menu.addSeparator()
             menu.addAction("下载").triggered.connect(
-                lambda: self.on_download_from_menu(self.related_list.selectedItems())
+                lambda: self.on_download_from_menu(selected_items)
             )
             menu.addAction("添加到收藏夹").triggered.connect(
-                lambda: self.on_add_to_favorites_from_menu(self.related_list.selectedItems())
+                lambda: self.on_add_to_favorites_from_menu(selected_items)
             )
             menu.exec_(self.related_list.viewport().mapToGlobal(pos))
 
@@ -1810,6 +2074,22 @@ class Hanime1GUI(QMainWindow):
                 worker.signals.result.connect(lambda result, title=list_title: self.on_video_info_for_download(result, title))
                 self.threadpool.start(worker, priority=20)
 
+    def on_preview_from_menu(self, items, mute=False):
+        """从右键菜单预览视频"""
+        if items:
+            item = items[0]  # 只处理第一个选中的项目（因为单选时才显示预览选项）
+            match = re.search(r"\[(\d+)\]\s*(.+)", item.text())
+            if match:
+                video_id = match.group(1)
+                worker = GetVideoInfoWorker(self.api, video_id, None)  # 需要完整信息以获取视频源
+                # 使用lambda函数传递mute参数
+                worker.signals.result.connect(lambda video_info: self.on_video_info_for_preview(video_info, mute))
+                self.threadpool.start(worker, priority=20)
+    
+    def on_mute_preview_from_menu(self, items):
+        """从右键菜单静音预览视频"""
+        self.on_preview_from_menu(items, mute=True)
+
     def on_video_info_for_download(self, video_info, list_title=None):
         if video_info and video_info["video_sources"]:
             # 使用列表中的标题而不是详细信息的标题
@@ -1822,6 +2102,19 @@ class Hanime1GUI(QMainWindow):
                 else video_info["video_sources"][-1]
             )
             self.add_to_download_queue(video_info, source)
+
+    def on_video_info_for_preview(self, video_info, mute=False):
+        """处理预览视频的视频信息"""
+        if video_info and video_info["video_sources"]:
+            # 根据设置中的默认下载画质选择视频源
+            quality = self.settings.get("download_quality", "最高")
+            source = (
+                video_info["video_sources"][0]
+                if quality == "最高"
+                else video_info["video_sources"][-1]
+            )
+            # 播放视频（预览）
+            self.play_video(source["url"], mute)
 
     def load_favorites(self):
         if os.path.exists(self.favorites_file):
@@ -2326,13 +2619,15 @@ class Hanime1GUI(QMainWindow):
                     scale_image_to_fit()
 
                     # 使用事件过滤器来监听resize事件
-                    def event_filter(obj, event):
-                        if event.type() == QEvent.Resize:
-                            scale_image_to_fit()
-                        return False
+                    class ResizeEventFilter(QObject):
+                        def eventFilter(self, obj, event):
+                            if event.type() == QEvent.Resize:
+                                scale_image_to_fit()
+                            return super().eventFilter(obj, event)
 
-                    cover_dialog.installEventFilter(cover_dialog)
-                    cover_dialog.eventFilter = event_filter
+                    # 创建事件过滤器实例
+                    resize_filter = ResizeEventFilter()
+                    cover_dialog.installEventFilter(resize_filter)
 
                 else:
                     cover_label.setText("无法加载图片")
