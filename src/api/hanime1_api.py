@@ -548,6 +548,255 @@ class Hanime1API:
 
         return result
 
+    def _extract_video_sources_from_download_page(self, video_id):
+        """从下载页面提取视频源
+
+        参数:
+            video_id: 视频ID
+        """
+        download_url = f"{self.base_url}/download?v={video_id}"
+        try:
+            response = self.session.get(download_url, timeout=10)
+            if response.status_code != 200:
+                print(f"下载页面状态码: {response.status_code}")
+                return []
+
+            html_content = response.text
+            soup = BeautifulSoup(html_content, "html.parser")
+
+            video_sources = []
+            
+            # 过滤掉非视频链接的域名或路径
+            unwanted_patterns = [
+                "cdnjs.cloudflare.com",
+                "cdn.jsdelivr.net",
+                ".css",
+                ".js",
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".ico"
+            ]
+            
+            def is_valid_video_link(link):
+                """检查是否是有效的视频链接"""
+                if not link:
+                    return False
+                # 检查是否包含不需要的模式
+                for pattern in unwanted_patterns:
+                    if pattern in link.lower():
+                        return False
+                # 检查是否是下载页面本身的链接
+                if f"/download?v={video_id}" in link:
+                    return False
+                # 去除查询参数部分，只保留路径部分用于检查
+                path_part = link.split('?')[0]
+                # 过滤掉 m3u8 播放列表链接，因为我们只需要直接的 mp4 文件
+                if path_part.lower().endswith(".m3u8"):
+                    return False
+                # 只接受以.mp4结尾的链接，确保是直接的视频文件
+                if not path_part.lower().endswith(".mp4"):
+                    return False
+                # 检查是否包含视频相关的关键词，确保是视频文件
+                return ("video" in link.lower() or "cdn" in link.lower() or 
+                        "file" in link.lower() or "mp4" in link.lower())
+            
+            def extract_quality_from_url(url):
+                """从URL中提取画质信息"""
+                quality = "unknown"
+                quality_num = 0
+                
+                # 尝试从URL中提取分辨率信息
+                # 匹配URL路径中类似 "-1920-1080-" 这样的分辨率模式
+                # 使用负向先行断言确保匹配的是独立的分辨率部分
+                resolution_match = re.search(r'-(\d{3,4})-(\d{3,4})-', url)
+                if resolution_match:
+                    try:
+                        width = int(resolution_match.group(1))
+                        # 根据宽度推断画质
+                        if width >= 1920:
+                            quality = "1080p"
+                            quality_num = 1080
+                        elif width >= 1280:
+                            quality = "720p"
+                            quality_num = 720
+                        elif width >= 852:
+                            quality = "480p"
+                            quality_num = 480
+                        elif width >= 640:
+                            quality = "360p"
+                            quality_num = 360
+                        elif width >= 426:
+                            quality = "240p"
+                            quality_num = 240
+                    except ValueError:
+                        pass
+                
+                # 尝试直接匹配画质模式，如 1080p, 720p 等
+                if quality == "unknown":
+                    quality_match = re.search(r'-(\d{3,4})p-', url, re.IGNORECASE)
+                    if quality_match:
+                        try:
+                            quality = quality_match.group(1) + "p"
+                            quality_num = int(quality_match.group(1))
+                        except ValueError:
+                            pass
+                
+                return quality, quality_num
+            
+            # 查找所有可能的视频链接
+            # 1. 查找带有href属性的a标签，包含视频链接
+            links = soup.find_all("a", href=True)
+            for link in links:
+                href = link.get("href")
+                if href and is_valid_video_link(href):
+                    if not href.startswith("http"):
+                        href = urljoin(self.base_url, href)
+                    
+                    # 尝试从链接文本或URL中提取质量信息
+                    link_text = link.get_text(strip=True)
+                    quality = "unknown"
+                    quality_num = 0
+                    
+                    # 从链接文本中提取质量信息
+                    if link_text:
+                        quality_match = re.search(r'(\d{3,4})p', link_text, re.IGNORECASE)
+                        if quality_match:
+                            quality = quality_match.group(0)
+                            try:
+                                quality_num = int(quality_match.group(1))
+                            except ValueError:
+                                pass
+                    
+                    # 如果链接文本中没有质量信息，从URL中提取
+                    if quality == "unknown":
+                        quality, quality_num = extract_quality_from_url(href)
+                    
+                    # 去除链接末尾的空格
+                    href = href.strip()
+                    # 避免重复添加相同的链接
+                    if not any(src["url"] == href for src in video_sources):
+                        # 正确识别MIME类型
+                        # 检查URL路径部分是否包含.mp4
+                        path_part = href.split('?')[0]  # 去除查询参数部分
+                        mime_type = "video/mp4" if path_part.lower().endswith(".mp4") else "application/x-mpegURL"
+                        video_sources.append(
+                            {
+                                "url": href,
+                                "quality": quality,
+                                "quality_num": quality_num,
+                                "type": mime_type,
+                            }
+                        )
+            
+            # 2. 查找可能的video标签
+            video_tags = soup.find_all("video")
+            for video_tag in video_tags:
+                sources = video_tag.find_all("source")
+                for source in sources:
+                    src = source.get("src")
+                    if src and is_valid_video_link(src):
+                        if not src.startswith("http"):
+                            src = urljoin(self.base_url, src)
+                        
+                        quality = source.get("size", "unknown")
+                        quality_num = 0
+                        if isinstance(quality, str):
+                            quality_str = quality.lower().replace("p", "")
+                            try:
+                                quality_num = int(quality_str)
+                            except ValueError:
+                                # 如果无法从size属性中提取，尝试从URL中提取
+                                _, quality_num = extract_quality_from_url(src)
+                        elif isinstance(quality, int):
+                            quality_num = quality
+                        
+                        # 如果quality仍然是unknown，尝试从URL中提取
+                        if quality == "unknown":
+                            quality, _ = extract_quality_from_url(src)
+                        
+                        # 去除链接末尾的空格
+                        src = src.strip()
+                        if not any(s["url"] == src for s in video_sources):
+                            # 正确识别MIME类型
+                            mime_type = source.get("type", "video/mp4")
+                            if not mime_type or mime_type == "application/x-mpegURL" and src.lower().endswith(".mp4"):
+                                mime_type = "video/mp4"
+                            video_sources.append(
+                                {
+                                    "url": src,
+                                    "quality": quality,
+                                    "quality_num": quality_num,
+                                    "type": mime_type,
+                                }
+                            )
+            
+            # 3. 查找可能的脚本中的视频链接
+            scripts = soup.find_all("script")
+            for script in scripts:
+                if script.string:
+                    # 查找可能的视频链接
+                    script_text = script.string
+                    # 匹配 http 开头，以 .mp4 结尾的链接
+                    mp4_links = re.findall(r'https?://[^"\']+\.mp4', script_text)
+                    for link in mp4_links:
+                        link = link.strip()
+                        if is_valid_video_link(link) and not any(src["url"] == link for src in video_sources):
+                            quality, quality_num = extract_quality_from_url(link)
+                            video_sources.append(
+                                {
+                                    "url": link,
+                                    "quality": quality,
+                                    "quality_num": quality_num,
+                                    "type": "video/mp4",
+                                }
+                            )
+                    # 匹配 m3u8 播放列表链接
+                    m3u8_links = re.findall(r'https?://[^"\']+\.m3u8', script_text)
+                    for link in m3u8_links:
+                        link = link.strip()
+                        if is_valid_video_link(link) and not any(src["url"] == link for src in video_sources):
+                            quality, quality_num = extract_quality_from_url(link)
+                            video_sources.append(
+                                {
+                                    "url": link,
+                                    "quality": quality,
+                                    "quality_num": quality_num,
+                                    "type": "application/x-mpegURL",
+                                }
+                            )
+            
+            # 4. 查找可能的div或其他标签中的视频链接
+            all_tags = soup.find_all()
+            for tag in all_tags:
+                # 检查标签的所有属性，寻找可能的视频链接
+                for attr in tag.attrs:
+                    attr_value = tag[attr]
+                    if isinstance(attr_value, str):
+                        attr_value = attr_value.strip()
+                        if is_valid_video_link(attr_value) and not any(src["url"] == attr_value for src in video_sources):
+                            quality, quality_num = extract_quality_from_url(attr_value)
+                            # 正确识别MIME类型
+                            path_part = attr_value.split('?')[0]  # 去除查询参数部分
+                            mime_type = "video/mp4" if path_part.lower().endswith(".mp4") else "application/x-mpegURL"
+                            video_sources.append(
+                                {
+                                    "url": attr_value,
+                                    "quality": quality,
+                                    "quality_num": quality_num,
+                                    "type": mime_type,
+                                }
+                            )
+            
+            # 对视频源按照质量从高到低排序
+            video_sources.sort(key=lambda x: x["quality_num"], reverse=True)
+            
+            return video_sources
+        except Exception as e:
+            print(f"从下载页面提取视频源出错 (ID: {video_id}): {str(e)}")
+            return []
+
     def get_video_info(self, video_id, visibility_settings=None):
         """获取视频详细信息
 
@@ -654,6 +903,10 @@ class Hanime1API:
                     for source in sources:
                         src = source.get("src")
                         if src:
+                            # 过滤掉 m3u8 播放列表链接，因为我们会从下载页面提取更高质量的 mp4 链接
+                            if src.lower().endswith(".m3u8"):
+                                continue
+                            
                             if not src.startswith("http"):
                                 src = urljoin(self.base_url, src)
 
@@ -689,16 +942,35 @@ class Hanime1API:
                                 result = self.REGEX_VIDEO_SOURCE.search(script.string)
                                 if result:
                                     video_url = result.group(1)
-                                    video_info["video_sources"].append(
-                                        {
-                                            "url": video_url,
-                                            "quality": "unknown",
-                                            "quality_num": 0,
-                                            "type": "video/mp4",
-                                        }
-                                    )
-                                    break
+                                    # 过滤掉 m3u8 播放列表链接，因为我们会从下载页面提取更高质量的 mp4 链接
+                                    if not video_url.lower().endswith(".m3u8"):
+                                        video_info["video_sources"].append(
+                                            {
+                                                "url": video_url,
+                                                "quality": "unknown",
+                                                "quality_num": 0,
+                                                "type": "video/mp4",
+                                            }
+                                        )
+                                        break
 
+                # 从下载页面提取视频源，补充更多链接
+                download_page_sources = self._extract_video_sources_from_download_page(video_id)
+                for source in download_page_sources:
+                    # 避免重复添加相同的链接
+                    if not any(src["url"] == source["url"] for src in video_info["video_sources"]):
+                        video_info["video_sources"].append(source)
+
+                # 过滤掉所有 m3u8 播放列表链接，只保留直接的 mp4 文件
+                filtered_sources = []
+                for source in video_info["video_sources"]:
+                    # 检查URL路径部分是否包含.m3u8
+                    path_part = source["url"].split('?')[0]  # 去除查询参数部分
+                    if not path_part.lower().endswith(".m3u8"):
+                        filtered_sources.append(source)
+                # 使用过滤后的列表
+                video_info["video_sources"] = filtered_sources
+                
                 # 对视频源按照质量从高到低排序
                 video_info["video_sources"].sort(key=lambda x: x["quality_num"], reverse=True)
 
